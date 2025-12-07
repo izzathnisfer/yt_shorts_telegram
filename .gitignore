@@ -1,0 +1,32 @@
+# Environment
+.env
+
+# Pyrogram sessions
+*.session
+*.session-journal
+
+# Downloads and data
+downloads/
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
