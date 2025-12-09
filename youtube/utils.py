@@ -115,11 +115,12 @@ def build_channel_url(channel_id: str, id_type: str = 'channel') -> str:
         return f"https://www.youtube.com/user/{channel_id}"
 
 
-def format_duration(seconds: int) -> str:
+def format_duration(seconds) -> str:
     """Format duration in seconds to human readable string."""
     if seconds is None or seconds < 0:
         return "0:00"
     
+    seconds = int(seconds)  # Ensure integer
     hours = seconds // 3600
     minutes = (seconds % 3600) // 60
     secs = seconds % 60
@@ -130,11 +131,12 @@ def format_duration(seconds: int) -> str:
         return f"{minutes}:{secs:02d}"
 
 
-def format_duration_long(seconds: int) -> str:
+def format_duration_long(seconds) -> str:
     """Format duration to long readable string (e.g., '2h 30m')."""
     if seconds is None or seconds < 0:
         return "0m"
     
+    seconds = int(seconds)  # Ensure integer
     hours = seconds // 3600
     minutes = (seconds % 3600) // 60
     

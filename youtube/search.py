@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 import logging
 
 from .utils import format_duration, format_views
-from config import SEARCH_RESULTS_LIMIT
+from config import SEARCH_RESULTS_LIMIT, COOKIES_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,10 @@ def _search_sync(query: str, search_type: str = 'video', limit: int = 5) -> List
             'extract_flat': True,
             'skip_download': True,
         }
+        
+        # Add cookies if file exists
+        if COOKIES_PATH.exists():
+            ydl_opts['cookiefile'] = str(COOKIES_PATH)
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(search_url, download=False)

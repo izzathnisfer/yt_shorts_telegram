@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 import logging
 
 from .utils import extract_video_id, is_shorts_url, format_duration
+from config import COOKIES_PATH
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,7 @@ _executor = ThreadPoolExecutor(max_workers=2)
 
 def _get_yt_opts(quiet: bool = True) -> dict:
     """Get base yt-dlp options."""
-    return {
+    opts = {
         'quiet': quiet,
         'no_warnings': quiet,
         'extract_flat': False,
@@ -27,6 +28,12 @@ def _get_yt_opts(quiet: bool = True) -> dict:
         'no_playlist': True,
         'ignoreerrors': True,
     }
+    
+    # Add cookies if file exists
+    if COOKIES_PATH.exists():
+        opts['cookiefile'] = str(COOKIES_PATH)
+    
+    return opts
 
 
 def _extract_info_sync(url: str, opts: dict = None) -> Optional[Dict[str, Any]]:

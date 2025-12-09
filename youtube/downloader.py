@@ -14,7 +14,7 @@ import logging
 import subprocess
 import shutil
 
-from config import DOWNLOADS_PATH, YTDLP_FORMAT, YTDLP_AUDIO_FORMAT, MAX_FILE_SIZE_BYTES
+from config import DOWNLOADS_PATH, YTDLP_FORMAT, YTDLP_AUDIO_FORMAT, MAX_FILE_SIZE_BYTES, COOKIES_PATH
 from .utils import sanitize_filename, parse_time_range
 
 logger = logging.getLogger(__name__)
@@ -75,6 +75,10 @@ def _download_video_sync(
             }],
         }
         
+        # Add cookies if file exists
+        if COOKIES_PATH.exists():
+            ydl_opts['cookiefile'] = str(COOKIES_PATH)
+        
         if progress_hook:
             ydl_opts['progress_hooks'] = [progress_hook]
         
@@ -122,35 +126,61 @@ def _download_audio_sync(
             }],
         }
         
+        # Add cookies if file exists
+        if COOKIES_PATH.exists():
+            ydl_opts['cookiefile'] = str(COOKIES_PATH)
+        
         if progress_hook:
             ydl_opts['progress_hooks'] = [progress_hook]
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         
-        # Find the MP3 file
-        base_path = Path(output_path).with_suffix('')
-        mp3_path = base_path.with_suffix('.mp3')
+        # Find the MP3 file - yt-dlp adds .mp3 extension via postprocessor
+        base_path = Path(output_path)
+        mp3_path = Path(str(output_path) + '.mp3')
+        
+        logger.debug(f"Looking for audio file at: {mp3_path}")
         
         if mp3_path.exists():
+            logger.info(f"Found audio file: {mp3_path}")
             return str(mp3_path)
+        
+        # Try with suffix method
+        mp3_path_alt = base_path.with_suffix('.mp3')
+        if mp3_path_alt.exists():
+            logger.info(f"Found audio file (alt): {mp3_path_alt}")
+            return str(mp3_path_alt)
+        
+        # Fallback: glob for any matching mp3 files in downloads directory
+        downloads_dir = base_path.parent
+        filename_start = base_path.name[:30]  # First 30 chars for matching
+        
+        for mp3_file in downloads_dir.glob('*.mp3'):
+            if mp3_file.name.startswith(filename_start):
+                logger.info(f"Found audio file via glob: {mp3_file}")
+                return str(mp3_file)
         
         # Check for other audio formats and convert
         for ext in ['.m4a', '.webm', '.opus']:
-            check_path = base_path.with_suffix(ext)
+            check_path = Path(str(output_path) + ext)
             if check_path.exists():
                 # Convert to MP3
                 try:
+                    mp3_output = Path(str(output_path) + '.mp3')
                     subprocess.run([
-                        'ffmpeg', '-i', str(check_path),
+                        'ffmpeg', '-y', '-i', str(check_path),
                         '-vn', '-acodec', 'libmp3lame', '-q:a', '2',
-                        str(mp3_path)
+                        str(mp3_output)
                     ], check=True, capture_output=True)
                     check_path.unlink()  # Remove original
-                    return str(mp3_path)
+                    return str(mp3_output)
                 except Exception as e:
                     logger.error(f"FFmpeg conversion error: {e}")
                     return str(check_path)  # Return original format
+        
+        # Last resort - list all files in downloads
+        logger.warning(f"Could not find audio file. Downloads dir contents: {list(downloads_dir.glob('*'))[:5]}")
         
         return None
         
@@ -229,7 +259,8 @@ async def download_audio(
         else:
             filename = "audio"
     
-    output_path = str(DOWNLOADS_PATH / f"{filename}.mp3")
+    # Don't add .mp3 here - yt-dlp postprocessor will add it
+    output_path = str(DOWNLOADS_PATH / filename)
     
     # Setup progress tracking
     progress = DownloadProgress(progress_callback)

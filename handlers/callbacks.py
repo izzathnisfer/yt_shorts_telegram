@@ -76,6 +76,13 @@ async def handle_video_download(
     query = update.callback_query
     user_id = update.effective_user.id
     
+    async def safe_edit(text):
+        """Edit message with timeout protection."""
+        try:
+            await query.edit_message_text(text)
+        except Exception as e:
+            logger.warning(f"Could not edit message: {e}")
+    
     # Check for duplicate
     if not force:
         duplicate = await check_duplicate(user_id, video_id)
@@ -101,27 +108,27 @@ async def handle_video_download(
     
     # Get video info
     url = build_video_url(video_id)
-    await query.edit_message_text("⏳ Getting video info...")
+    await safe_edit("⏳ Getting video info...")
     
     info = await get_video_info(url)
     if not info:
-        await query.edit_message_text("❌ Could not get video info. Please try again.")
+        await safe_edit("❌ Could not get video info. YouTube may require authentication.")
         return
     
     # Get user settings for quality
     settings = await get_user_settings(user_id)
     quality = settings.get('resolution', '720')
     
-    await query.edit_message_text(f"📥 Downloading: {info['title'][:50]}...")
+    await safe_edit(f"📥 Downloading: {info['title'][:50]}...")
     
     # Download video
     file_path = await download_video(url, quality=quality)
     
     if not file_path:
-        await query.edit_message_text("❌ Download failed. Please try again.")
+        await safe_edit("❌ Download failed. YouTube may require authentication. Try again later.")
         return
     
-    await query.edit_message_text(f"📤 Uploading to Telegram...")
+    await safe_edit(f"📤 Uploading to Telegram...")
     
     # Prepare caption
     caption = f"🎬 **{info['title']}**\n\n"
@@ -133,9 +140,9 @@ async def handle_video_download(
         chat_id=user_id,
         file_path=file_path,
         caption=caption,
-        duration=info['duration'],
-        width=info.get('width', 0),
-        height=info.get('height', 0),
+        duration=int(info['duration']),
+        width=info.get('width', 0) or 0,
+        height=info.get('height', 0) or 0,
     )
     
     # Clean up file
@@ -177,24 +184,31 @@ async def handle_audio_download(
     query = update.callback_query
     user_id = update.effective_user.id
     
+    async def safe_edit(text):
+        """Edit message with timeout protection."""
+        try:
+            await query.edit_message_text(text)
+        except Exception as e:
+            logger.warning(f"Could not edit message: {e}")
+    
     url = build_video_url(video_id)
-    await query.edit_message_text("⏳ Getting video info...")
+    await safe_edit("⏳ Getting video info...")
     
     info = await get_video_info(url)
     if not info:
-        await query.edit_message_text("❌ Could not get video info. Please try again.")
+        await safe_edit("❌ Could not get video info. YouTube may require authentication.")
         return
     
-    await query.edit_message_text(f"🎵 Extracting audio: {info['title'][:50]}...")
+    await safe_edit(f"🎵 Extracting audio: {info['title'][:50]}...")
     
     # Download audio
     file_path = await download_audio(url)
     
     if not file_path:
-        await query.edit_message_text("❌ Audio extraction failed. Please try again.")
+        await safe_edit("❌ Audio extraction failed. YouTube may require authentication.")
         return
     
-    await query.edit_message_text(f"📤 Uploading audio...")
+    await safe_edit(f"📤 Uploading audio...")
     
     # Upload to Telegram
     caption = f"🎵 **{info['title']}**\n📺 {info['channel_name']}"
@@ -205,16 +219,16 @@ async def handle_audio_download(
         caption=caption,
         title=info['title'],
         performer=info['channel_name'],
-        duration=info['duration'],
+        duration=int(info['duration']),
     )
     
     # Clean up file
     delete_file(file_path)
     
     if message_id:
-        await query.edit_message_text("✅ Audio sent!")
+        await safe_edit("✅ Audio sent!")
     else:
-        await query.edit_message_text("❌ Upload failed. Please try again.")
+        await safe_edit("❌ Upload failed. Please try again.")
 
 
 async def handle_add_favorite(

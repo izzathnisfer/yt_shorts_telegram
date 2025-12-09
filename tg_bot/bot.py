@@ -25,7 +25,7 @@ def register_handlers(application: Application) -> None:
     from handlers.subscribe import subscribe_conversation
     from handlers.unsubscribe import unsubscribe_command, unsubscribe_callback
     from handlers.list_channels import list_command
-    from handlers.search import search_command, search_callback
+    from handlers.search import search_command, search_callback, text_search_handler
     from handlers.queue import queue_command, queue_callback
     from handlers.download import download_command
     from handlers.audio import audio_command
@@ -82,6 +82,12 @@ def register_handlers(application: Application) -> None:
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.Regex(r'(youtube\.com|youtu\.be)'),
         youtube_url_handler
+    ))
+    
+    # Auto-search: any text message that's not a command or YouTube URL
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND,
+        text_search_handler
     ))
     
     logger.info("All handlers registered")

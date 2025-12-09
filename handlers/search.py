@@ -19,10 +19,28 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     else:
         await update.message.reply_text(
             "🔍 **Search YouTube**\n\n"
-            "Usage: `/search your query here`\n\n"
-            "Example: `/search python tutorial`",
+            "Send me what you're looking for, or use:\n"
+            "`/search your query here`",
             parse_mode='Markdown'
         )
+
+
+async def text_search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Handle plain text messages as search queries.
+    This allows users to just type what they want to find.
+    """
+    if not update.message or not update.message.text:
+        return
+    
+    query = update.message.text.strip()
+    
+    # Skip if empty or too short
+    if len(query) < 2:
+        return
+    
+    # Perform the search
+    await perform_search(update, context, query)
 
 
 async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str) -> None:
