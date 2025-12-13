@@ -116,12 +116,14 @@ def _download_audio_sync(
     Returns the path to downloaded MP3 file or None on failure.
     """
     try:
-        # Use simplest options - let yt-dlp pick any available format
+        # Use mweb client which bypasses SSAP restrictions better
         ydl_opts = {
+            'format': 'bestaudio/best',  # Explicit: best audio or best overall
             'outtmpl': output_path,
             'quiet': False,
             'no_warnings': False,
-            # Extract audio from whatever format is available
+            # Use mweb client to bypass SSAP - per yt-dlp issue #12482
+            'extractor_args': {'youtube': {'player_client': ['mweb']}},
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
