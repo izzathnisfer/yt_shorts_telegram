@@ -116,14 +116,14 @@ def _download_audio_sync(
     Returns the path to downloaded MP3 file or None on failure.
     """
     try:
-        # Use mweb client which bypasses SSAP restrictions better
+        # Use tv_embedded client which often works without PO token
         ydl_opts = {
-            'format': 'bestaudio/best',  # Explicit: best audio or best overall
+            'format': 'bestaudio/best',
             'outtmpl': output_path,
             'quiet': False,
             'no_warnings': False,
-            # Use mweb client to bypass SSAP - per yt-dlp issue #12482
-            'extractor_args': {'youtube': {'player_client': ['mweb']}},
+            # tv_embedded often works without authentication requirements
+            'extractor_args': {'youtube': {'player_client': ['tv_embedded', 'web']}},
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
