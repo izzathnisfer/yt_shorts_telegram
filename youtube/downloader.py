@@ -119,6 +119,7 @@ def _download_audio_sync(
             'outtmpl': output_path,
             'quiet': True,
             'no_warnings': True,
+            'extract_audio': True,  # Ensure we extract audio
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
