@@ -271,6 +271,8 @@ async def _run_leech_task(
     status_message = None
     download_path = None
     file_name = f"file_{task_id}"
+    db_task_id = None  # For database tracking
+    file_size = 0
     
     try:
         reply_markup = get_cancel_button(user_id, task_id)
@@ -279,6 +281,9 @@ async def _run_leech_task(
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
+        
+        # Record task start in database
+        db_task_id = await record_leech_start(user_id, file_name, upload_target)
         
         _task_statuses[(user_id, task_id)] = {
             "status": "Starting",
@@ -431,6 +436,9 @@ async def _run_leech_task(
             )
             
             if message_id:
+                # Record successful completion in database
+                if db_task_id:
+                    await update_leech_status(db_task_id, 'completed', file_size=file_size)
                 await _edit_status(status_message, "✅ Upload complete!", reply_markup=None)
                 await asyncio.sleep(5)
                 with suppress(Exception):
@@ -442,8 +450,14 @@ async def _run_leech_task(
             await _upload_to_nextcloud(
                 user_id, download_path, file_name, status_message, task_id
             )
+            # Record successful completion for Nextcloud
+            if db_task_id:
+                await update_leech_status(db_task_id, 'completed', file_size=file_size)
     
     except asyncio.CancelledError:
+        # Record cancellation in database
+        if db_task_id:
+            await update_leech_status(db_task_id, 'cancelled', file_size=file_size)
         await _edit_status(status_message, "❌ Task cancelled.", reply_markup=None)
         await asyncio.sleep(5)
         with suppress(Exception):
@@ -451,6 +465,9 @@ async def _run_leech_task(
         raise
     
     except Exception as e:
+        # Record failure in database
+        if db_task_id:
+            await update_leech_status(db_task_id, 'failed', file_size=file_size, error_message=str(e)[:200])
         error_msg = f"❌ Task Failed!\n\n**Error:** {str(e)[:500]}"
         logger.error(f"Leech task {task_id} failed: {e}")
         if status_message:
