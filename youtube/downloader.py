@@ -116,24 +116,18 @@ def _download_audio_sync(
     Returns the path to downloaded MP3 file or None on failure.
     """
     try:
+        # Use simplest options - let yt-dlp pick any available format
         ydl_opts = {
-            'format': YTDLP_AUDIO_FORMAT,
             'outtmpl': output_path,
-            'quiet': False,  # Show output for debugging
+            'quiet': False,
             'no_warnings': False,
-            'ignoreerrors': False,
-            # Use iOS/Android clients to bypass SSAP restrictions
-            'extractor_args': {'youtube': {'player_client': ['ios', 'android']}},
+            # Extract audio from whatever format is available
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }],
         }
-        
-        # Add cookies if file exists
-        if COOKIES_PATH.exists():
-            ydl_opts['cookiefile'] = str(COOKIES_PATH)
         
         if progress_hook:
             ydl_opts['progress_hooks'] = [progress_hook]
