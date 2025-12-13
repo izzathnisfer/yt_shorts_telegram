@@ -38,12 +38,19 @@ HELP_MESSAGE = """
 • `/limit` - View/set daily watch limit
 • `/limit 15` - Set limit to 15 videos/day
 
+**📥 Leech (URL Downloads)**
+• `/l <url>` - Download URL to Telegram
+• `/ld <url>` - Download URL to Nextcloud
+• `/setnc` - Configure Nextcloud settings
+• `/num <msg>` - Sum of squares of digits
+
 **⚙️ Settings**
 • `/settings` - All preferences
 • `/priority` - Manage priority channels
 • `/nickname` - Set channel nicknames
 • `/export` - Export your data (backup)
 • `/import` - Restore from backup
+• `/admin` - Admin panel (admins only)
 
 **💡 Tips**
 • Send any YouTube link to download it directly

@@ -1,6 +1,6 @@
 """
-Advanced Admin panel handler for LeechBot features.
-Provides comprehensive monitoring and management capabilities.
+Comprehensive Admin Panel - Full bot monitoring and management.
+Provides unified view of all bot activities (YT + Leech).
 """
 
 import os
@@ -14,15 +14,12 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from config import DOWNLOADS_PATH
-from services.leech_data import (
-    get_all_leech_users, get_nc_settings, update_nc_setting, 
-    get_leech_stats, DEFAULT_NC_DELETE_TIMER
-)
-from handlers.leech import get_active_tasks, get_task, humanbytes, get_readable_time
+from database import get_pool
+from services.leech_data import get_all_leech_users, get_leech_stats
 
 logger = logging.getLogger(__name__)
 
-# Admin user IDs - loaded from env
+# Admin user IDs
 _admin_users: Optional[tuple] = None
 _bot_start_time = time.time()
 
@@ -47,109 +44,235 @@ def is_admin(user_id: int) -> bool:
     return user_id in _load_admin_users()
 
 
+def humanbytes(size: float) -> str:
+    """Convert bytes to human readable format."""
+    if not size:
+        return "0B"
+    power = 1024
+    t_n = 0
+    power_dict = {0: "B", 1: "KB", 2: "MB", 3: "GB", 4: "TB"}
+    while size >= power and t_n < len(power_dict) - 1:
+        size /= power
+        t_n += 1
+    return f"{size:.2f} {power_dict[t_n]}"
+
+
+def get_readable_time(seconds: int) -> str:
+    """Convert seconds to readable time string."""
+    result = ""
+    seconds = int(seconds)
+    days, remainder = divmod(seconds, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if days > 0:
+        result += f"{days}d "
+    if hours > 0:
+        result += f"{hours}h "
+    if minutes > 0:
+        result += f"{minutes}m "
+    if seconds > 0 or not result:
+        result += f"{seconds}s"
+    return result.strip()
+
+
 def _admin_menu_keyboard() -> InlineKeyboardMarkup:
     """Build admin panel main menu keyboard."""
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📋 Active Tasks", callback_data="admin:tasks"),
-            InlineKeyboardButton("📊 Statistics", callback_data="admin:stats"),
+            InlineKeyboardButton("📊 Bot Summary", callback_data="admin:summary"),
+            InlineKeyboardButton("🖥️ System", callback_data="admin:system"),
         ],
         [
-            InlineKeyboardButton("📜 Task History", callback_data="admin:history"),
             InlineKeyboardButton("👥 Users", callback_data="admin:users"),
+            InlineKeyboardButton("📺 Subscriptions", callback_data="admin:subs"),
         ],
         [
-            InlineKeyboardButton("🖥️ System Status", callback_data="admin:status"),
+            InlineKeyboardButton("📋 Active Tasks", callback_data="admin:tasks"),
+            InlineKeyboardButton("📈 Leech Stats", callback_data="admin:leech"),
+        ],
+        [
+            InlineKeyboardButton("📢 Broadcast", callback_data="admin:broadcast"),
             InlineKeyboardButton("💾 Storage", callback_data="admin:storage"),
         ],
         [InlineKeyboardButton("❌ Close", callback_data="admin:close")],
     ])
 
 
-def _get_system_status_detailed() -> str:
+async def _get_bot_summary() -> str:
+    """Get comprehensive bot summary."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # User stats
+        user_count = await conn.fetchval("SELECT COUNT(*) FROM users")
+        active_users = await conn.fetchval(
+            "SELECT COUNT(DISTINCT user_id) FROM video_history WHERE created_at > NOW() - INTERVAL '7 days'"
+        )
+        
+        # Subscription stats
+        sub_count = await conn.fetchval("SELECT COUNT(*) FROM subscriptions")
+        
+        # Watch stats
+        total_videos = await conn.fetchval("SELECT COUNT(*) FROM video_history")
+        total_duration = await conn.fetchval(
+            "SELECT COALESCE(SUM(duration), 0) FROM video_history"
+        ) or 0
+        
+        # Queue stats
+        queue_count = await conn.fetchval("SELECT COUNT(*) FROM queue")
+        
+        # Favorites
+        fav_count = await conn.fetchval("SELECT COUNT(*) FROM favorites")
+    
+    # Leech stats
+    try:
+        leech_stats = await get_leech_stats()
+        leech_total = leech_stats.get('total_tasks', 0)
+        leech_data = humanbytes(leech_stats.get('total_bytes', 0))
+    except:
+        leech_total = 0
+        leech_data = "0B"
+    
+    uptime = get_readable_time(int(time.time() - _bot_start_time))
+    hours_watched = total_duration // 3600
+    
+    return (
+        "📊 **Bot Summary**\n\n"
+        f"**Users:**\n"
+        f"├ Total: {user_count}\n"
+        f"├ Active (7d): {active_users}\n"
+        f"└ Subscriptions: {sub_count}\n\n"
+        f"**Content:**\n"
+        f"├ Videos watched: {total_videos}\n"
+        f"├ Watch time: {hours_watched}h\n"
+        f"├ Queue items: {queue_count}\n"
+        f"└ Favorites: {fav_count}\n\n"
+        f"**Leech:**\n"
+        f"├ Total tasks: {leech_total}\n"
+        f"└ Data transferred: {leech_data}\n\n"
+        f"**Uptime:** {uptime}"
+    )
+
+
+async def _get_system_status() -> str:
     """Get detailed system status."""
     try:
         cpu = psutil.cpu_percent(interval=0.5)
         mem = psutil.virtual_memory()
         disk = psutil.disk_usage(str(DOWNLOADS_PATH))
-        uptime = get_readable_time(int(time.time() - _bot_start_time))
-        
-        # Network I/O
-        net = psutil.net_io_counters()
-        
-        # Load average (if available)
-        try:
-            load = os.getloadavg()
-            load_str = f"{load[0]:.2f}, {load[1]:.2f}, {load[2]:.2f}"
-        except (AttributeError, OSError):
-            load_str = "N/A"
-        
-        active_tasks = get_active_tasks()
         
         return (
             "🖥️ **System Status**\n\n"
-            f"**CPU Usage:** {cpu}%\n"
-            f"**Load Average:** {load_str}\n\n"
-            f"**RAM:** {mem.percent}%\n"
-            f"├ Used: {humanbytes(mem.used)}\n"
-            f"├ Free: {humanbytes(mem.available)}\n"
-            f"└ Total: {humanbytes(mem.total)}\n\n"
-            f"**Disk:** {disk.percent}%\n"
-            f"├ Used: {humanbytes(disk.used)}\n"
-            f"├ Free: {humanbytes(disk.free)}\n"
-            f"└ Total: {humanbytes(disk.total)}\n\n"
-            f"**Network I/O:**\n"
-            f"├ Sent: {humanbytes(net.bytes_sent)}\n"
-            f"└ Recv: {humanbytes(net.bytes_recv)}\n\n"
-            f"**Bot Uptime:** {uptime}\n"
-            f"**Active Tasks:** {len(active_tasks)}"
+            f"**CPU:** {cpu}%\n"
+            f"**RAM:** {mem.percent}% ({humanbytes(mem.used)}/{humanbytes(mem.total)})\n"
+            f"**Disk:** {disk.percent}% ({humanbytes(disk.free)} free)\n"
+            f"**Uptime:** {get_readable_time(int(time.time() - _bot_start_time))}"
         )
     except Exception as e:
-        logger.error(f"Error getting system status: {e}")
-        return "❌ Error getting system status."
+        return f"❌ Error: {e}"
+
+
+async def _get_user_stats() -> str:
+    """Get user statistics."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        total = await conn.fetchval("SELECT COUNT(*) FROM users")
+        active_today = await conn.fetchval(
+            "SELECT COUNT(DISTINCT user_id) FROM video_history WHERE DATE(created_at) = CURRENT_DATE"
+        )
+        active_week = await conn.fetchval(
+            "SELECT COUNT(DISTINCT user_id) FROM video_history WHERE created_at > NOW() - INTERVAL '7 days'"
+        )
+        
+        # Top users by watch time
+        top_users = await conn.fetch("""
+            SELECT u.username, u.first_name, u.user_id, 
+                   COALESCE(SUM(vh.duration), 0) as total_duration,
+                   COUNT(vh.id) as video_count
+            FROM users u
+            LEFT JOIN video_history vh ON u.user_id = vh.user_id
+            GROUP BY u.user_id, u.username, u.first_name
+            ORDER BY total_duration DESC
+            LIMIT 5
+        """)
+    
+    text = (
+        f"👥 **User Statistics**\n\n"
+        f"**Total Users:** {total}\n"
+        f"**Active Today:** {active_today}\n"
+        f"**Active (7d):** {active_week}\n\n"
+        f"**Top Users (by watch time):**\n"
+    )
+    
+    for i, u in enumerate(top_users, 1):
+        name = u['username'] or u['first_name'] or str(u['user_id'])
+        hours = u['total_duration'] // 3600
+        text += f"{i}. {name[:15]} - {u['video_count']} videos ({hours}h)\n"
+    
+    return text
+
+
+async def _get_subscription_stats() -> str:
+    """Get subscription statistics."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        total = await conn.fetchval("SELECT COUNT(*) FROM subscriptions")
+        unique_channels = await conn.fetchval(
+            "SELECT COUNT(DISTINCT channel_id) FROM subscriptions"
+        )
+        
+        # Most subscribed channels
+        top_channels = await conn.fetch("""
+            SELECT channel_name, COUNT(*) as sub_count
+            FROM subscriptions
+            GROUP BY channel_name
+            ORDER BY sub_count DESC
+            LIMIT 5
+        """)
+    
+    text = (
+        f"📺 **Subscription Statistics**\n\n"
+        f"**Total Subscriptions:** {total}\n"
+        f"**Unique Channels:** {unique_channels}\n\n"
+        f"**Most Subscribed:**\n"
+    )
+    
+    for i, ch in enumerate(top_channels, 1):
+        text += f"{i}. {ch['channel_name'][:20]} ({ch['sub_count']} subs)\n"
+    
+    return text
 
 
 async def _get_storage_info() -> str:
-    """Get detailed storage information."""
+    """Get storage information."""
     try:
         disk = psutil.disk_usage(str(DOWNLOADS_PATH))
-        
-        # Count files in downloads
         download_files = list(DOWNLOADS_PATH.glob("*"))
         file_count = len([f for f in download_files if f.is_file()])
-        total_download_size = sum(f.stat().st_size for f in download_files if f.is_file())
+        total_size = sum(f.stat().st_size for f in download_files if f.is_file())
         
         return (
-            "💾 **Storage Information**\n\n"
-            f"**Downloads Directory:**\n"
-            f"├ Path: `{DOWNLOADS_PATH}`\n"
+            "💾 **Storage**\n\n"
+            f"**Downloads:**\n"
             f"├ Files: {file_count}\n"
-            f"└ Size: {humanbytes(total_download_size)}\n\n"
-            f"**Disk Usage:**\n"
+            f"└ Size: {humanbytes(total_size)}\n\n"
+            f"**Disk:**\n"
             f"├ Used: {humanbytes(disk.used)} ({disk.percent}%)\n"
-            f"├ Free: {humanbytes(disk.free)}\n"
-            f"└ Total: {humanbytes(disk.total)}"
+            f"└ Free: {humanbytes(disk.free)}"
         )
     except Exception as e:
-        logger.error(f"Error getting storage info: {e}")
-        return "❌ Error getting storage information."
+        return f"❌ Error: {e}"
 
 
 async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /admin command - Open advanced admin panel."""
+    """Handle /admin command."""
     user_id = update.effective_user.id
     
     if not is_admin(user_id):
-        await update.message.reply_text("❌ You are not an admin.")
+        await update.message.reply_text("❌ You are not authorized.")
         return
     
-    active_tasks = get_active_tasks()
-    
     await update.message.reply_text(
-        "🔧 **Admin Control Panel**\n\n"
-        f"📋 Active Tasks: **{len(active_tasks)}**\n"
-        f"⏱️ Uptime: {get_readable_time(int(time.time() - _bot_start_time))}\n\n"
-        "Select an option below:",
+        "🔧 **Admin Panel**\n\nSelect an option:",
         parse_mode='Markdown',
         reply_markup=_admin_menu_keyboard()
     )
@@ -161,234 +284,146 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_id = query.from_user.id
     
     if not is_admin(user_id):
-        await query.answer("You are not an admin.", show_alert=True)
+        await query.answer("Unauthorized", show_alert=True)
         return
     
     await query.answer()
     data = query.data
     
-    back_button = [[InlineKeyboardButton("◀️ Back", callback_data="admin:menu")]]
-    refresh_back = [
-        [InlineKeyboardButton("🔄 Refresh", callback_data=data)],
+    back_refresh = lambda d: InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Refresh", callback_data=d)],
         [InlineKeyboardButton("◀️ Back", callback_data="admin:menu")]
-    ]
+    ])
     
     if data == "admin:close":
         await query.message.delete()
     
     elif data == "admin:menu":
-        active_tasks = get_active_tasks()
         await query.message.edit_text(
-            "🔧 **Admin Control Panel**\n\n"
-            f"📋 Active Tasks: **{len(active_tasks)}**\n"
-            f"⏱️ Uptime: {get_readable_time(int(time.time() - _bot_start_time))}\n\n"
-            "Select an option below:",
+            "🔧 **Admin Panel**\n\nSelect an option:",
             parse_mode='Markdown',
             reply_markup=_admin_menu_keyboard()
         )
     
-    elif data == "admin:status":
-        status = _get_system_status_detailed()
-        await query.message.edit_text(
-            status, parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup(refresh_back)
-        )
+    elif data == "admin:summary":
+        text = await _get_bot_summary()
+        await query.message.edit_text(text, parse_mode='Markdown', reply_markup=back_refresh(data))
     
-    elif data == "admin:storage":
-        storage_info = await _get_storage_info()
-        buttons = [
-            [InlineKeyboardButton("🧹 Clean Downloads", callback_data="admin:clean")],
-            [InlineKeyboardButton("🔄 Refresh", callback_data="admin:storage")],
-            [InlineKeyboardButton("◀️ Back", callback_data="admin:menu")]
-        ]
-        await query.message.edit_text(
-            storage_info, parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup(buttons)
-        )
+    elif data == "admin:system":
+        text = await _get_system_status()
+        await query.message.edit_text(text, parse_mode='Markdown', reply_markup=back_refresh(data))
     
-    elif data == "admin:clean":
-        # Clean old files from downloads
-        try:
-            cleaned = 0
-            cleaned_size = 0
-            for f in DOWNLOADS_PATH.glob("*"):
-                if f.is_file():
-                    age = time.time() - f.stat().st_mtime
-                    if age > 3600:  # Older than 1 hour
-                        size = f.stat().st_size
-                        f.unlink()
-                        cleaned += 1
-                        cleaned_size += size
-            
-            await query.answer(
-                f"🧹 Cleaned {cleaned} files ({humanbytes(cleaned_size)})",
-                show_alert=True
-            )
-        except Exception as e:
-            await query.answer(f"Error: {str(e)[:50]}", show_alert=True)
-        
-        # Refresh storage view
-        storage_info = await _get_storage_info()
-        buttons = [
-            [InlineKeyboardButton("🧹 Clean Downloads", callback_data="admin:clean")],
-            [InlineKeyboardButton("🔄 Refresh", callback_data="admin:storage")],
-            [InlineKeyboardButton("◀️ Back", callback_data="admin:menu")]
-        ]
-        await query.message.edit_text(
-            storage_info, parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup(buttons)
-        )
+    elif data == "admin:users":
+        text = await _get_user_stats()
+        await query.message.edit_text(text, parse_mode='Markdown', reply_markup=back_refresh(data))
+    
+    elif data == "admin:subs":
+        text = await _get_subscription_stats()
+        await query.message.edit_text(text, parse_mode='Markdown', reply_markup=back_refresh(data))
     
     elif data == "admin:tasks":
+        from handlers.leech import get_active_tasks
         tasks = get_active_tasks()
         
         if not tasks:
             text = "📋 **Active Tasks**\n\n_No active tasks._"
-            await query.message.edit_text(
-                text, parse_mode='Markdown',
-                reply_markup=InlineKeyboardMarkup(refresh_back)
-            )
         else:
             text = f"📋 **Active Tasks** ({len(tasks)})\n\n"
-            buttons = []
-            
-            for (uid, tid), info in tasks.items():
-                progress = info.get('progress', 0)
-                bar_filled = int(progress / 10)
-                bar = '█' * bar_filled + '░' * (10 - bar_filled)
-                
-                text += (
-                    f"**User:** `{uid}`\n"
-                    f"**File:** `{info.get('file_name', 'Unknown')[:25]}...`\n"
-                    f"**Progress:** [{bar}] {progress:.1f}%\n"
-                    f"**Speed:** {info.get('speed', 'N/A')} | **ETA:** {info.get('eta', 'N/A')}\n"
-                    f"───────────────\n"
-                )
-                buttons.append([InlineKeyboardButton(
-                    f"❌ Cancel Task {tid}", 
-                    callback_data=f"admin:cancel:{uid}:{tid}"
-                )])
-            
-            buttons.append([InlineKeyboardButton("🔄 Refresh", callback_data="admin:tasks")])
-            buttons.append([InlineKeyboardButton("◀️ Back", callback_data="admin:menu")])
-            
-            await query.message.edit_text(
-                text[:4096], parse_mode='Markdown',
-                reply_markup=InlineKeyboardMarkup(buttons)
-            )
+            for (uid, tid), info in list(tasks.items())[:5]:
+                text += f"• User `{uid}`: {info.get('file_name', 'Unknown')[:20]}... ({info.get('progress', 0):.0f}%)\n"
+        
+        await query.message.edit_text(text, parse_mode='Markdown', reply_markup=back_refresh(data))
     
-    elif data == "admin:stats":
+    elif data == "admin:leech":
         try:
             stats = await get_leech_stats()
-            
             text = (
-                "📊 **Leech Statistics**\n\n"
+                "📈 **Leech Statistics**\n\n"
                 f"**All Time:**\n"
-                f"├ Total Tasks: {stats['total_tasks']}\n"
-                f"├ Completed: {stats['completed']} ✅\n"
-                f"├ Failed: {stats['failed']} ❌\n"
-                f"├ Cancelled: {stats['cancelled']} 🚫\n"
-                f"└ Total Data: {humanbytes(stats['total_bytes'])}\n\n"
+                f"├ Total: {stats['total_tasks']}\n"
+                f"├ Completed: {stats['completed']}\n"
+                f"├ Failed: {stats['failed']}\n"
+                f"└ Data: {humanbytes(stats['total_bytes'])}\n\n"
                 f"**Today:**\n"
                 f"├ Tasks: {stats['today_tasks']}\n"
                 f"└ Data: {humanbytes(stats['today_bytes'])}"
             )
-            
-            await query.message.edit_text(
-                text, parse_mode='Markdown',
-                reply_markup=InlineKeyboardMarkup(refresh_back)
-            )
         except Exception as e:
-            logger.error(f"Error getting stats: {e}")
-            await query.message.edit_text(
-                "❌ Error fetching statistics. Database may not be initialized.",
-                reply_markup=InlineKeyboardMarkup(back_button)
-            )
+            text = f"❌ Error: {e}"
+        
+        await query.message.edit_text(text, parse_mode='Markdown', reply_markup=back_refresh(data))
     
-    elif data == "admin:history":
+    elif data == "admin:storage":
+        text = await _get_storage_info()
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🧹 Clean Old Files", callback_data="admin:clean")],
+            [InlineKeyboardButton("🔄 Refresh", callback_data="admin:storage")],
+            [InlineKeyboardButton("◀️ Back", callback_data="admin:menu")]
+        ])
+        await query.message.edit_text(text, parse_mode='Markdown', reply_markup=keyboard)
+    
+    elif data == "admin:clean":
+        cleaned = 0
+        for f in DOWNLOADS_PATH.glob("*"):
+            if f.is_file() and (time.time() - f.stat().st_mtime) > 3600:
+                try:
+                    f.unlink()
+                    cleaned += 1
+                except:
+                    pass
+        await query.answer(f"🧹 Cleaned {cleaned} files", show_alert=True)
+        # Refresh storage view
+        text = await _get_storage_info()
+        await query.message.edit_text(text, parse_mode='Markdown', reply_markup=back_refresh("admin:storage"))
+    
+    elif data == "admin:broadcast":
+        context.user_data['admin_broadcast'] = True
+        await query.message.edit_text(
+            "📢 **Broadcast Message**\n\n"
+            "Send the message you want to broadcast to all users.\n"
+            "Use `/cancel` to cancel.",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ Cancel", callback_data="admin:menu")]
+            ])
+        )
+
+
+async def handle_broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Handle broadcast message from admin. Returns True if handled."""
+    if not context.user_data.get('admin_broadcast'):
+        return False
+    
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return False
+    
+    context.user_data['admin_broadcast'] = False
+    message_text = update.message.text
+    
+    if message_text == '/cancel':
+        await update.message.reply_text("❌ Broadcast cancelled.")
+        return True
+    
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        users = await conn.fetch("SELECT user_id FROM users WHERE is_active = TRUE")
+    
+    sent = 0
+    failed = 0
+    
+    status = await update.message.reply_text(f"📢 Broadcasting to {len(users)} users...")
+    
+    for user in users:
         try:
-            stats = await get_leech_stats()
-            recent = stats.get('recent', [])
-            
-            if not recent:
-                text = "📜 **Task History**\n\n_No tasks recorded yet._"
-            else:
-                text = "📜 **Recent Tasks** (Last 10)\n\n"
-                for task in recent[:10]:
-                    status_icon = {
-                        'completed': '✅',
-                        'failed': '❌', 
-                        'cancelled': '🚫',
-                        'downloading': '⬇️',
-                        'uploading': '⬆️'
-                    }.get(task['status'], '⏳')
-                    
-                    user_name = task.get('username') or task.get('first_name') or str(task['user_id'])
-                    file_name = (task.get('file_name') or 'Unknown')[:20]
-                    target = task.get('upload_target', 'N/A')
-                    
-                    text += (
-                        f"{status_icon} `{file_name}...`\n"
-                        f"   └ {user_name} → {target}\n"
-                    )
-            
-            await query.message.edit_text(
-                text[:4096], parse_mode='Markdown',
-                reply_markup=InlineKeyboardMarkup(refresh_back)
+            await context.bot.send_message(
+                chat_id=user['user_id'],
+                text=f"📢 **Announcement**\n\n{message_text}",
+                parse_mode='Markdown'
             )
-        except Exception as e:
-            logger.error(f"Error getting history: {e}")
-            await query.message.edit_text(
-                "❌ Error fetching history.",
-                reply_markup=InlineKeyboardMarkup(back_button)
-            )
+            sent += 1
+        except Exception:
+            failed += 1
     
-    elif data == "admin:users":
-        try:
-            users = await get_all_leech_users()
-            
-            if not users:
-                text = "👥 **Leech Users**\n\n_No users with leech settings._"
-            else:
-                text = f"👥 **Leech Users** ({len(users)})\n\n"
-                for u in users[:15]:
-                    nc_icon = "✅" if u['nc_configured'] else "⚠️"
-                    delete_icon = "🗑️" if u['nc_auto_delete'] else "💾"
-                    text += (
-                        f"{nc_icon} `{u['user_id']}` - {u['username'][:15]}\n"
-                        f"   └ NC: {nc_icon} | {delete_icon} {u['nc_delete_timer']}m\n"
-                    )
-                
-                if len(users) > 15:
-                    text += f"\n_... and {len(users) - 15} more_"
-            
-            await query.message.edit_text(
-                text[:4096], parse_mode='Markdown',
-                reply_markup=InlineKeyboardMarkup(refresh_back)
-            )
-        except Exception as e:
-            logger.error(f"Error getting users: {e}")
-            await query.message.edit_text(
-                "❌ Error fetching users.",
-                reply_markup=InlineKeyboardMarkup(back_button)
-            )
-    
-    elif data.startswith("admin:cancel:"):
-        parts = data.split(":")
-        if len(parts) != 4:
-            return
-        
-        target_uid = int(parts[2])
-        target_tid = int(parts[3])
-        
-        task = get_task(target_uid, target_tid)
-        if task:
-            task.cancel()
-            await query.answer("✅ Task cancellation requested.", show_alert=True)
-        else:
-            await query.answer("Task not found or already completed.", show_alert=True)
-        
-        # Refresh task list
-        # Trigger tasks view refresh
-        query.data = "admin:tasks"
-        await admin_callback(update, context)
+    await status.edit_text(f"✅ Broadcast complete!\n\nSent: {sent}\nFailed: {failed}")
+    return True

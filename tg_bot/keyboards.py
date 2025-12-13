@@ -23,10 +23,11 @@ def main_menu_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("⭐ Favorites", callback_data="menu:favorites"),
         ],
         [
+            InlineKeyboardButton("📥 Leech URL", callback_data="menu:leech"),
             InlineKeyboardButton("📊 Stats", callback_data="menu:stats"),
-            InlineKeyboardButton("⚙️ Settings", callback_data="menu:settings"),
         ],
         [
+            InlineKeyboardButton("⚙️ Settings", callback_data="menu:settings"),
             InlineKeyboardButton("❓ Help", callback_data="menu:help"),
         ],
     ]
@@ -285,6 +286,11 @@ def settings_keyboard(settings: Dict) -> InlineKeyboardMarkup:
     tz = settings.get('timezone', 'Asia/Kolkata')
     keyboard.append([
         InlineKeyboardButton(f"🕐 Timezone: {tz}", callback_data="settings:timezone")
+    ])
+    
+    # Nextcloud settings
+    keyboard.append([
+        InlineKeyboardButton("☁️ Nextcloud Settings", callback_data="settings:nextcloud")
     ])
     
     keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="menu:main")])

@@ -15,6 +15,38 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await show_stats(update, context)
 
 
+def _get_optimization_score(settings: dict, weekly_duration: int, queue_count: int = 0) -> int:
+    """Calculate time optimization score (0-100)."""
+    score = 50  # Base
+    
+    limit = settings.get('daily_limit', 20)
+    if limit > 0 and limit <= 20:
+        score += 15
+    
+    # Penalize high watch time
+    daily_avg_minutes = (weekly_duration / 7) / 60
+    if daily_avg_minutes > 120:
+        score -= 20
+    elif daily_avg_minutes > 60:
+        score -= 10
+    elif daily_avg_minutes < 30:
+        score += 10
+    
+    return max(0, min(100, score))
+
+
+def _score_emoji(score: int) -> str:
+    """Get emoji for score."""
+    if score >= 80:
+        return "🏆"
+    elif score >= 60:
+        return "✅"
+    elif score >= 40:
+        return "⚠️"
+    else:
+        return "🔴"
+
+
 async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show user statistics."""
     user_id = update.effective_user.id
@@ -41,12 +73,18 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     all_videos = all_time['videos_watched'] + all_time['shorts_watched']
     all_duration = format_duration_long(all_time['total_duration'])
     
-    # Estimate time saved (assume 30 min saved per 5 videos by avoiding scrolling)
-    estimated_saved = (all_videos // 5) * 30  # minutes
+    # Estimate time saved
+    estimated_saved = (all_videos // 5) * 30
     saved_str = format_duration_long(estimated_saved * 60)
+    
+    # Time optimization score
+    score = _get_optimization_score(settings, weekly['total_duration'])
+    score_emoji = _score_emoji(score)
     
     message = f"""
 📊 **Your Statistics**
+
+{score_emoji} **Time Optimization Score: {score}/100**
 
 **Today** ({today_videos}/{limit_text})
 ├ 📺 Videos: {today['videos_watched']}
@@ -67,7 +105,7 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         message += "**Top Channels (by time):**\n"
         for i, ch in enumerate(weekly['top_channels'][:5], 1):
             duration = format_duration_long(ch['duration'])
-            message += f"{i}. {ch['channel_name']} - {ch['videos']} videos ({duration})\n"
+            message += f"{i}. {ch['channel_name']} ({duration})\n"
         message += "\n"
     
     message += f"""
@@ -75,8 +113,7 @@ async def show_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 ├ 📺 Total: {all_videos} videos
 └ ⏱️ Time: {all_duration}
 
-💪 **Estimated saved: ~{saved_str}**
-_by avoiding YouTube scrolling!_
+💪 **~{saved_str} saved** _vs endless scrolling!_
 """
     
     if update.callback_query:

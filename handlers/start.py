@@ -2,7 +2,7 @@
 Start command handler - Main menu and welcome message.
 """
 
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from database import get_or_create_user, get_user_settings, is_in_focus_mode, get_today_watch_count
@@ -157,3 +157,17 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     elif action == 'help':
         from handlers.help import show_help
         await show_help(update, context)
+    
+    elif action == 'leech':
+        await query.edit_message_text(
+            "📥 **Leech URL**\n\n"
+            "Download files from any direct URL:\n\n"
+            "• `/l <url>` - Upload to Telegram\n"
+            "• `/ld <url>` - Upload to Nextcloud\n\n"
+            "⚙️ Configure Nextcloud with `/setnc`",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⚙️ Nextcloud Settings", callback_data="settings:nextcloud")],
+                [InlineKeyboardButton("🔙 Back", callback_data="menu:main")]
+            ])
+        )

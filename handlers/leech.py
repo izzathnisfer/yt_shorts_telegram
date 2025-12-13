@@ -399,9 +399,25 @@ async def _run_leech_task(
         
         # Upload
         if upload_target == 'telegram':
+            file_stat = await aiostat(download_path)
+            total_size = file_stat.st_size
+            
+            async def tg_progress(current: int, total: int):
+                """Update status message with upload progress."""
+                pct = (current / total) * 100 if total > 0 else 0
+                filled = int(pct / 6.25)
+                bar = '▰' * filled + '▱' * (16 - filled)
+                progress_text = (
+                    f"**Uploading to Telegram** {pct:.1f}%\n"
+                    f"{bar}\n"
+                    f"📁 {humanbytes(current)} / {humanbytes(total)}\n\n"
+                    f"📝 File: `{file_name}`"
+                )
+                await _edit_status(status_message, progress_text, reply_markup)
+            
             await _edit_status(
                 status_message,
-                f"⬆️ Uploading `{file_name}` to Telegram...\n\n{get_system_status()}",
+                f"⬆️ Uploading `{file_name}` ({humanbytes(total_size)}) to Telegram...",
                 reply_markup
             )
             
@@ -411,6 +427,7 @@ async def _run_leech_task(
                 caption=f"`{file_name}`",
                 file_name=file_name,
                 reply_to_message_id=task_id,
+                progress_callback=tg_progress,
             )
             
             if message_id:

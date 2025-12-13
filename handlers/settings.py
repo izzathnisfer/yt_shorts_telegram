@@ -139,3 +139,18 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update_user_settings(user_id, quiet_start=None, quiet_end=None)
         await query.answer("✅ Quiet hours disabled")
         await show_settings(update, context)
+    
+    elif action == 'nextcloud':
+        from handlers.leech_nextcloud import setnc_command
+        # Redirect to setnc settings by calling the command handler
+        await query.answer()
+        await query.message.edit_text(
+            "☁️ **Nextcloud Settings**\n\n"
+            "Use `/setnc` to configure your Nextcloud:\n"
+            "• WebDAV URL\n"
+            "• Username\n"
+            "• App Password\n"
+            "• Auto-delete timer",
+            parse_mode='Markdown',
+            reply_markup=back_button("menu:settings")
+        )

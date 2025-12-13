@@ -76,6 +76,11 @@ async def post_init(application: Application) -> None:
     await init_leech_tables()
     logger.info("Leech tables initialized")
     
+    # Start the scheduler for subscription checking
+    from services.scheduler import setup_scheduler
+    setup_scheduler(application.bot)
+    logger.info("Scheduler started for subscription notifications")
+    
     # Cleanup old downloads
     logger.info("Cleaning up old downloads...")
     await cleanup_downloads(max_age_hours=24)
@@ -86,6 +91,10 @@ async def post_init(application: Application) -> None:
 async def post_shutdown(application: Application) -> None:
     """Cleanup on shutdown."""
     logger.info("Shutting down...")
+    
+    # Stop scheduler
+    from services.scheduler import stop_scheduler
+    stop_scheduler()
     
     # Stop Pyrogram client
     await stop_client()

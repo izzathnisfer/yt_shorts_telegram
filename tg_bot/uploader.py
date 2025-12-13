@@ -339,9 +339,13 @@ async def upload_document(
     caption: str = "",
     file_name: Optional[str] = None,
     reply_to_message_id: Optional[int] = None,
+    progress_callback: Optional[Callable] = None,
 ) -> Optional[int]:
     """
-    Upload a document file to Telegram.
+    Upload a document file to Telegram with optional progress callback.
+    
+    Args:
+        progress_callback: Optional async function(current, total) for progress updates
     
     Returns:
         Message ID of sent message or None on failure
@@ -352,6 +356,35 @@ async def upload_document(
         logger.error(f"File not found: {file_path}")
         return None
     
+    file_size = file_path.stat().st_size
+    file_name_str = file_name or file_path.name
+    
+    logger.info(f"Starting document upload of '{file_name_str}' ({_human_bytes(file_size)})")
+    
+    pbar = tqdm(
+        total=file_size,
+        unit="B",
+        unit_scale=True,
+        desc=f"Uploading {file_name_str[:30]}..."
+    )
+    
+    last_update = [0.0]
+    start_time = time.time()
+    
+    async def _combined_progress(current: int, total: int):
+        """Combined progress for tqdm and custom callback."""
+        pbar.n = current
+        pbar.refresh()
+        
+        # Call custom callback if provided (throttled)
+        now = time.time()
+        if progress_callback and now - last_update[0] >= 1.0:
+            last_update[0] = now
+            try:
+                await progress_callback(current, total)
+            except Exception as e:
+                logger.debug(f"Progress callback error: {e}")
+    
     try:
         client = await get_client()
         
@@ -359,15 +392,23 @@ async def upload_document(
             chat_id=chat_id,
             document=str(file_path),
             caption=caption[:1024] if caption else "",
-            file_name=file_name or file_path.name,
+            file_name=file_name_str,
             reply_to_message_id=reply_to_message_id,
             force_document=True,
+            progress=_combined_progress,
         )
+        
+        pbar.n = file_size
+        pbar.refresh()
+        
+        upload_duration = time.time() - start_time
+        logger.info(f"Successfully uploaded document '{file_name_str}' in {_get_readable_time(upload_duration)}")
         
         return message.id
         
     except FloodWait as e:
         logger.warning(f"FloodWait: Waiting {e.value} seconds")
+        pbar.close()
         await asyncio.sleep(e.value + 1)
         
         try:
@@ -376,7 +417,7 @@ async def upload_document(
                 chat_id=chat_id,
                 document=str(file_path),
                 caption=caption[:1024] if caption else "",
-                file_name=file_name or file_path.name,
+                file_name=file_name_str,
                 reply_to_message_id=reply_to_message_id,
                 force_document=True,
             )
@@ -388,3 +429,5 @@ async def upload_document(
     except Exception as e:
         logger.error(f"Failed to upload document: {e}")
         return None
+    finally:
+        pbar.close()
