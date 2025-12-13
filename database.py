@@ -522,7 +522,7 @@ async def get_recent_lofi_ids(user_id: int, days: int = 30) -> set:
         rows = await conn.fetch(
             """SELECT video_id FROM video_history 
                WHERE user_id = $1 AND is_lofi = TRUE 
-               AND created_at > NOW() - INTERVAL '%s days'""" % days,
+               AND watched_at > NOW() - INTERVAL '%s days'""" % days,
             user_id
         )
         return {row['video_id'] for row in rows}

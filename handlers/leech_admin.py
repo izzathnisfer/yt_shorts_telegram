@@ -109,7 +109,7 @@ async def _get_bot_summary() -> str:
             # Check if video_history exists and get stats
             try:
                 active_users = await conn.fetchval(
-                    "SELECT COUNT(DISTINCT user_id) FROM video_history WHERE created_at > NOW() - INTERVAL '7 days'"
+                    "SELECT COUNT(DISTINCT user_id) FROM video_history WHERE watched_at > NOW() - INTERVAL '7 days'"
                 ) or 0
                 total_videos = await conn.fetchval("SELECT COUNT(*) FROM video_history") or 0
                 total_duration = await conn.fetchval(
@@ -195,10 +195,10 @@ async def _get_user_stats() -> str:
     async with pool.acquire() as conn:
         total = await conn.fetchval("SELECT COUNT(*) FROM users")
         active_today = await conn.fetchval(
-            "SELECT COUNT(DISTINCT user_id) FROM video_history WHERE DATE(created_at) = CURRENT_DATE"
+            "SELECT COUNT(DISTINCT user_id) FROM video_history WHERE DATE(watched_at) = CURRENT_DATE"
         )
         active_week = await conn.fetchval(
-            "SELECT COUNT(DISTINCT user_id) FROM video_history WHERE created_at > NOW() - INTERVAL '7 days'"
+            "SELECT COUNT(DISTINCT user_id) FROM video_history WHERE watched_at > NOW() - INTERVAL '7 days'"
         )
         
         # Top users by watch time
