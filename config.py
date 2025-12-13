@@ -13,11 +13,16 @@ load_dotenv()
 # Base paths
 BASE_DIR = Path(__file__).parent
 DOWNLOADS_PATH = Path(os.getenv("DOWNLOADS_PATH", "./downloads"))
-DATABASE_PATH = Path(os.getenv("DATABASE_PATH", "./data/bot.db"))
 
 # Ensure directories exist
 DOWNLOADS_PATH.mkdir(parents=True, exist_ok=True)
-DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+# PostgreSQL Database Configuration
+DATABASE_HOST = os.getenv("DATABASE_HOST", "localhost")
+DATABASE_USER = os.getenv("DATABASE_USER", "postgres")
+DATABASE_PASSWORD = os.getenv("DATABASE_PASSWORD", "")
+DATABASE_NAME = os.getenv("DATABASE_NAME", "youtube_shorts_bot")
+DATABASE_PORT = int(os.getenv("DATABASE_PORT", "5432"))
 
 # Telegram credentials
 API_ID = int(os.getenv("API_ID", "0"))

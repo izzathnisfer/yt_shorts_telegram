@@ -13,7 +13,7 @@ from telegram.ext import Application
 
 from tg_bot.bot import register_handlers, error_handler
 from tg_bot.uploader import stop_client
-from database import init_db
+from database import init_db, close_pool
 from youtube.downloader import cleanup_downloads
 from config import BOT_TOKEN
 
@@ -78,6 +78,9 @@ async def post_shutdown(application: Application) -> None:
     
     # Stop Pyrogram client
     await stop_client()
+    
+    # Close database pool
+    await close_pool()
     
     logger.info("Shutdown complete!")
 

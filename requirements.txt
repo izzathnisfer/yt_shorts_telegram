@@ -4,6 +4,7 @@ tgcrypto>=1.2.5
 yt-dlp>=2024.12.01
 python-dotenv>=1.0.0
 aiosqlite>=0.19.0
+asyncpg>=0.29.0
 tqdm>=4.66.0
 apscheduler>=3.10.0
 pytz>=2024.1

@@ -1,45 +1,79 @@
 """
 Database operations for YouTube Shorts Bot.
-Uses async SQLite for non-blocking operations.
+Uses async PostgreSQL (asyncpg) for non-blocking operations.
 Handles all user data, subscriptions, queue, and statistics.
 """
 
-import aiosqlite
+import asyncpg
 from datetime import datetime, date, timedelta
 from typing import Optional, List, Dict, Any
-from pathlib import Path
-import json
+import logging
 
-from config import DATABASE_PATH, DEFAULT_CHECK_INTERVAL, DEFAULT_RESOLUTION, DEFAULT_DAILY_LIMIT
-from config import DEFAULT_QUIET_START, DEFAULT_QUIET_END, DEFAULT_TIMEZONE
+from config import (
+    DATABASE_HOST, DATABASE_USER, DATABASE_PASSWORD, 
+    DATABASE_NAME, DATABASE_PORT,
+    DEFAULT_CHECK_INTERVAL, DEFAULT_RESOLUTION, DEFAULT_DAILY_LIMIT,
+    DEFAULT_QUIET_START, DEFAULT_QUIET_END, DEFAULT_TIMEZONE
+)
+
+logger = logging.getLogger(__name__)
+
+# Global connection pool
+_pool: Optional[asyncpg.Pool] = None
+
+
+async def get_pool() -> asyncpg.Pool:
+    """Get or create the connection pool."""
+    global _pool
+    if _pool is None:
+        _pool = await asyncpg.create_pool(
+            host=DATABASE_HOST,
+            port=DATABASE_PORT,
+            user=DATABASE_USER,
+            password=DATABASE_PASSWORD,
+            database=DATABASE_NAME,
+            min_size=2,
+            max_size=10,
+            ssl='require'  # Koyeb requires SSL
+        )
+        logger.info("Database connection pool created")
+    return _pool
+
+
+async def close_pool():
+    """Close the connection pool."""
+    global _pool
+    if _pool:
+        await _pool.close()
+        _pool = None
+        logger.info("Database connection pool closed")
 
 
 async def init_db():
     """Initialize database with all required tables."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        db.row_factory = aiosqlite.Row
+    pool = await get_pool()
+    async with pool.acquire() as conn:
         # Users table
-        await db.execute("""
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
+                user_id BIGINT PRIMARY KEY,
                 username TEXT,
                 first_name TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                is_active BOOLEAN DEFAULT 1
+                is_active BOOLEAN DEFAULT TRUE
             )
         """)
         
         # User settings
-        await db.execute(f"""
+        await conn.execute(f"""
             CREATE TABLE IF NOT EXISTS user_settings (
-                user_id INTEGER PRIMARY KEY,
+                user_id BIGINT PRIMARY KEY,
                 daily_limit INTEGER DEFAULT {DEFAULT_DAILY_LIMIT},
                 check_interval INTEGER DEFAULT {DEFAULT_CHECK_INTERVAL},
                 resolution TEXT DEFAULT '{DEFAULT_RESOLUTION}',
                 quiet_start TEXT DEFAULT '{DEFAULT_QUIET_START}',
                 quiet_end TEXT DEFAULT '{DEFAULT_QUIET_END}',
-                auto_download_shorts BOOLEAN DEFAULT 1,
+                auto_download_shorts BOOLEAN DEFAULT TRUE,
                 focus_until TIMESTAMP,
                 timezone TEXT DEFAULT '{DEFAULT_TIMEZONE}',
                 FOREIGN KEY (user_id) REFERENCES users(user_id)
@@ -47,15 +81,15 @@ async def init_db():
         """)
         
         # Channel subscriptions
-        await db.execute("""
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS subscriptions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
                 channel_id TEXT,
                 channel_name TEXT,
                 channel_url TEXT,
                 nickname TEXT,
-                is_priority BOOLEAN DEFAULT 0,
+                is_priority BOOLEAN DEFAULT FALSE,
                 subscribed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(user_id),
                 UNIQUE(user_id, channel_id)
@@ -63,10 +97,10 @@ async def init_db():
         """)
         
         # Watch queue
-        await db.execute("""
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS queue (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
                 video_id TEXT,
                 video_url TEXT,
                 title TEXT,
@@ -74,24 +108,24 @@ async def init_db():
                 duration INTEGER,
                 thumbnail_url TEXT,
                 added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                is_downloaded BOOLEAN DEFAULT 0,
+                is_downloaded BOOLEAN DEFAULT FALSE,
                 FOREIGN KEY (user_id) REFERENCES users(user_id),
                 UNIQUE(user_id, video_id)
             )
         """)
         
         # Video history (for duplicate detection & stats)
-        await db.execute("""
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS video_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
                 video_id TEXT,
                 title TEXT,
                 channel_id TEXT,
                 channel_name TEXT,
                 duration INTEGER,
                 is_short BOOLEAN,
-                is_lofi BOOLEAN DEFAULT 0,
+                is_lofi BOOLEAN DEFAULT FALSE,
                 watched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 source TEXT,
                 FOREIGN KEY (user_id) REFERENCES users(user_id),
@@ -100,10 +134,10 @@ async def init_db():
         """)
         
         # Daily stats
-        await db.execute("""
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS daily_stats (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
                 date DATE,
                 videos_watched INTEGER DEFAULT 0,
                 shorts_watched INTEGER DEFAULT 0,
@@ -116,10 +150,10 @@ async def init_db():
         """)
         
         # Channel stats (for per-channel time tracking)
-        await db.execute("""
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS channel_stats (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
                 channel_id TEXT,
                 channel_name TEXT,
                 videos_watched INTEGER DEFAULT 0,
@@ -131,10 +165,10 @@ async def init_db():
         """)
         
         # Favorites
-        await db.execute("""
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS favorites (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
                 video_id TEXT,
                 video_url TEXT,
                 title TEXT,
@@ -148,10 +182,10 @@ async def init_db():
         """)
         
         # Seen videos (for new video detection in subscriptions)
-        await db.execute("""
+        await conn.execute("""
             CREATE TABLE IF NOT EXISTS seen_videos (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
                 video_id TEXT,
                 seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (user_id) REFERENCES users(user_id),
@@ -159,36 +193,33 @@ async def init_db():
             )
         """)
         
-        await db.commit()
+        logger.info("Database tables initialized")
 
 
 # ============ User Operations ============
 
 async def get_or_create_user(user_id: int, username: str = None, first_name: str = None) -> Dict[str, Any]:
     """Get existing user or create new one with default settings."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM users WHERE user_id = ?", (user_id,)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM users WHERE user_id = $1", user_id
         )
-        user = await cursor.fetchone()
         
-        if user:
-            return dict(user)
+        if row:
+            return dict(row)
         
         # Create new user
-        await db.execute(
-            "INSERT INTO users (user_id, username, first_name) VALUES (?, ?, ?)",
-            (user_id, username, first_name)
+        await conn.execute(
+            "INSERT INTO users (user_id, username, first_name) VALUES ($1, $2, $3)",
+            user_id, username, first_name
         )
         
         # Create default settings
-        await db.execute(
-            "INSERT INTO user_settings (user_id) VALUES (?)",
-            (user_id,)
+        await conn.execute(
+            "INSERT INTO user_settings (user_id) VALUES ($1)",
+            user_id
         )
-        
-        await db.commit()
         
         return {
             "user_id": user_id,
@@ -200,12 +231,11 @@ async def get_or_create_user(user_id: int, username: str = None, first_name: str
 
 async def get_all_active_users() -> List[Dict[str, Any]]:
     """Get all active users for scheduled tasks."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM users WHERE is_active = 1"
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM users WHERE is_active = TRUE"
         )
-        rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
 
@@ -213,22 +243,20 @@ async def get_all_active_users() -> List[Dict[str, Any]]:
 
 async def get_user_settings(user_id: int) -> Dict[str, Any]:
     """Get user settings."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM user_settings WHERE user_id = ?", (user_id,)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM user_settings WHERE user_id = $1", user_id
         )
-        row = await cursor.fetchone()
         
         if row:
             return dict(row)
         
         # Create default settings if not exists
-        await db.execute(
-            "INSERT OR IGNORE INTO user_settings (user_id) VALUES (?)",
-            (user_id,)
+        await conn.execute(
+            "INSERT INTO user_settings (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING",
+            user_id
         )
-        await db.commit()
         
         return {
             "user_id": user_id,
@@ -248,21 +276,27 @@ async def update_user_settings(user_id: int, **kwargs) -> None:
     if not kwargs:
         return
     
-    set_clause = ", ".join(f"{k} = ?" for k in kwargs.keys())
-    values = list(kwargs.values()) + [user_id]
+    # Build SET clause with positional parameters
+    set_parts = []
+    values = []
+    for i, (k, v) in enumerate(kwargs.items(), start=1):
+        set_parts.append(f"{k} = ${i}")
+        values.append(v)
     
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute(
-            f"UPDATE user_settings SET {set_clause} WHERE user_id = ?",
-            values
+    set_clause = ", ".join(set_parts)
+    values.append(user_id)
+    
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            f"UPDATE user_settings SET {set_clause} WHERE user_id = ${len(values)}",
+            *values
         )
-        await db.commit()
 
 
 async def set_focus_mode(user_id: int, until: Optional[datetime]) -> None:
     """Set or clear focus mode for user."""
-    await update_user_settings(user_id, focus_until=until.isoformat() if until else None)
+    await update_user_settings(user_id, focus_until=until)
 
 
 async def is_in_focus_mode(user_id: int) -> tuple[bool, Optional[datetime]]:
@@ -273,7 +307,12 @@ async def is_in_focus_mode(user_id: int) -> tuple[bool, Optional[datetime]]:
     if not focus_until:
         return False, None
     
-    end_time = datetime.fromisoformat(focus_until)
+    # Handle if it's already a datetime object
+    if isinstance(focus_until, datetime):
+        end_time = focus_until
+    else:
+        end_time = datetime.fromisoformat(str(focus_until))
+    
     if end_time <= datetime.now():
         # Focus mode expired, clear it
         await set_focus_mode(user_id, None)
@@ -287,79 +326,74 @@ async def is_in_focus_mode(user_id: int) -> tuple[bool, Optional[datetime]]:
 async def add_subscription(user_id: int, channel_id: str, channel_name: str, 
                           channel_url: str, is_priority: bool = False) -> bool:
     """Add a channel subscription. Returns True if added, False if already exists."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    pool = await get_pool()
+    async with pool.acquire() as conn:
         try:
-            await db.execute(
+            await conn.execute(
                 """INSERT INTO subscriptions 
                    (user_id, channel_id, channel_name, channel_url, is_priority)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (user_id, channel_id, channel_name, channel_url, is_priority)
+                   VALUES ($1, $2, $3, $4, $5)""",
+                user_id, channel_id, channel_name, channel_url, is_priority
             )
-            await db.commit()
             return True
-        except aiosqlite.IntegrityError:
+        except asyncpg.UniqueViolationError:
             return False
 
 
 async def remove_subscription(user_id: int, channel_id: str) -> bool:
     """Remove a channel subscription."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "DELETE FROM subscriptions WHERE user_id = ? AND channel_id = ?",
-            (user_id, channel_id)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM subscriptions WHERE user_id = $1 AND channel_id = $2",
+            user_id, channel_id
         )
-        await db.commit()
-        return cursor.rowcount > 0
+        # asyncpg returns 'DELETE X' where X is the row count
+        return result.split()[-1] != '0'
 
 
 async def get_subscriptions(user_id: int) -> List[Dict[str, Any]]:
     """Get all subscriptions for a user."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
             """SELECT * FROM subscriptions 
-               WHERE user_id = ? 
+               WHERE user_id = $1 
                ORDER BY is_priority DESC, channel_name ASC""",
-            (user_id,)
+            user_id
         )
-        rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
 
 async def get_subscription(user_id: int, channel_id: str) -> Optional[Dict[str, Any]]:
     """Get a specific subscription."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM subscriptions WHERE user_id = ? AND channel_id = ?",
-            (user_id, channel_id)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM subscriptions WHERE user_id = $1 AND channel_id = $2",
+            user_id, channel_id
         )
-        row = await cursor.fetchone()
         return dict(row) if row else None
 
 
 async def set_channel_priority(user_id: int, channel_id: str, is_priority: bool) -> None:
     """Toggle priority status for a channel."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute(
-            "UPDATE subscriptions SET is_priority = ? WHERE user_id = ? AND channel_id = ?",
-            (is_priority, user_id, channel_id)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE subscriptions SET is_priority = $1 WHERE user_id = $2 AND channel_id = $3",
+            is_priority, user_id, channel_id
         )
-        await db.commit()
 
 
 async def set_channel_nickname(user_id: int, channel_id: str, nickname: Optional[str]) -> None:
     """Set a custom nickname for a channel."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute(
-            "UPDATE subscriptions SET nickname = ? WHERE user_id = ? AND channel_id = ?",
-            (nickname, user_id, channel_id)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE subscriptions SET nickname = $1 WHERE user_id = $2 AND channel_id = $3",
+            nickname, user_id, channel_id
         )
-        await db.commit()
 
 
 # ============ Queue Operations ============
@@ -367,66 +401,61 @@ async def set_channel_nickname(user_id: int, channel_id: str, nickname: Optional
 async def add_to_queue(user_id: int, video_id: str, video_url: str, title: str,
                        channel_name: str, duration: int, thumbnail_url: str = None) -> bool:
     """Add video to watch queue. Returns True if added, False if already exists."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    pool = await get_pool()
+    async with pool.acquire() as conn:
         try:
-            await db.execute(
+            await conn.execute(
                 """INSERT INTO queue 
                    (user_id, video_id, video_url, title, channel_name, duration, thumbnail_url)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (user_id, video_id, video_url, title, channel_name, duration, thumbnail_url)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7)""",
+                user_id, video_id, video_url, title, channel_name, duration, thumbnail_url
             )
-            await db.commit()
             return True
-        except aiosqlite.IntegrityError:
+        except asyncpg.UniqueViolationError:
             return False
 
 
 async def remove_from_queue(user_id: int, video_id: str) -> bool:
     """Remove video from queue."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "DELETE FROM queue WHERE user_id = ? AND video_id = ?",
-            (user_id, video_id)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM queue WHERE user_id = $1 AND video_id = $2",
+            user_id, video_id
         )
-        await db.commit()
-        return cursor.rowcount > 0
+        return result.split()[-1] != '0'
 
 
 async def get_queue(user_id: int) -> List[Dict[str, Any]]:
     """Get all queued videos for a user."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM queue WHERE user_id = ? ORDER BY added_at ASC",
-            (user_id,)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM queue WHERE user_id = $1 ORDER BY added_at ASC",
+            user_id
         )
-        rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
 
 async def clear_queue(user_id: int) -> int:
     """Clear all queued videos. Returns count of removed items."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "DELETE FROM queue WHERE user_id = ?",
-            (user_id,)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM queue WHERE user_id = $1",
+            user_id
         )
-        await db.commit()
-        return cursor.rowcount
+        return int(result.split()[-1])
 
 
 async def mark_queue_downloaded(user_id: int, video_id: str) -> None:
     """Mark a queued video as downloaded."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute(
-            "UPDATE queue SET is_downloaded = 1 WHERE user_id = ? AND video_id = ?",
-            (user_id, video_id)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE queue SET is_downloaded = TRUE WHERE user_id = $1 AND video_id = $2",
+            user_id, video_id
         )
-        await db.commit()
 
 
 # ============ Video History & Duplicate Detection ============
@@ -435,53 +464,50 @@ async def add_to_history(user_id: int, video_id: str, title: str, channel_id: st
                          channel_name: str, duration: int, is_short: bool,
                          is_lofi: bool = False, source: str = "direct") -> bool:
     """Add video to history. Returns True if new, False if duplicate."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    pool = await get_pool()
+    async with pool.acquire() as conn:
         try:
-            await db.execute(
+            await conn.execute(
                 """INSERT INTO video_history 
                    (user_id, video_id, title, channel_id, channel_name, duration, is_short, is_lofi, source)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (user_id, video_id, title, channel_id, channel_name, duration, is_short, is_lofi, source)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)""",
+                user_id, video_id, title, channel_id, channel_name, duration, is_short, is_lofi, source
             )
-            await db.commit()
             return True
-        except aiosqlite.IntegrityError:
+        except asyncpg.UniqueViolationError:
             return False
 
 
 async def check_duplicate(user_id: int, video_id: str) -> Optional[Dict[str, Any]]:
     """Check if video was already downloaded. Returns history entry if exists."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM video_history WHERE user_id = ? AND video_id = ?",
-            (user_id, video_id)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM video_history WHERE user_id = $1 AND video_id = $2",
+            user_id, video_id
         )
-        row = await cursor.fetchone()
         return dict(row) if row else None
 
 
 async def mark_video_seen(user_id: int, video_id: str) -> None:
     """Mark a video as seen (for subscription new video detection)."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        await db.execute(
-            "INSERT OR IGNORE INTO seen_videos (user_id, video_id) VALUES (?, ?)",
-            (user_id, video_id)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO seen_videos (user_id, video_id) VALUES ($1, $2) ON CONFLICT (user_id, video_id) DO NOTHING",
+            user_id, video_id
         )
-        await db.commit()
 
 
 async def is_video_seen(user_id: int, video_id: str) -> bool:
     """Check if a video has been seen by user."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT 1 FROM seen_videos WHERE user_id = ? AND video_id = ?",
-            (user_id, video_id)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT 1 FROM seen_videos WHERE user_id = $1 AND video_id = $2",
+            user_id, video_id
         )
-        return await cursor.fetchone() is not None
+        return row is not None
 
 
 # ============ Statistics Operations ============
@@ -489,43 +515,40 @@ async def is_video_seen(user_id: int, video_id: str) -> bool:
 async def record_watch(user_id: int, channel_id: str, channel_name: str, 
                        duration: int, is_short: bool, is_lofi: bool = False) -> None:
     """Record a video watch for statistics."""
-    today = date.today().isoformat()
+    today = date.today()
     
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        # Update daily stats
-        await db.execute("""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Update daily stats with UPSERT
+        await conn.execute("""
             INSERT INTO daily_stats (user_id, date, videos_watched, shorts_watched, 
                                      lofi_sessions, total_duration, lofi_duration)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(user_id, date) DO UPDATE SET
-                videos_watched = videos_watched + CASE WHEN ? = 0 AND ? = 0 THEN 1 ELSE 0 END,
-                shorts_watched = shorts_watched + CASE WHEN ? = 1 THEN 1 ELSE 0 END,
-                lofi_sessions = lofi_sessions + CASE WHEN ? = 1 THEN 1 ELSE 0 END,
-                total_duration = total_duration + ?,
-                lofi_duration = lofi_duration + CASE WHEN ? = 1 THEN ? ELSE 0 END
-        """, (user_id, today, 
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (user_id, date) DO UPDATE SET
+                videos_watched = daily_stats.videos_watched + CASE WHEN $8 = FALSE AND $9 = FALSE THEN 1 ELSE 0 END,
+                shorts_watched = daily_stats.shorts_watched + CASE WHEN $8 = TRUE THEN 1 ELSE 0 END,
+                lofi_sessions = daily_stats.lofi_sessions + CASE WHEN $9 = TRUE THEN 1 ELSE 0 END,
+                total_duration = daily_stats.total_duration + $6,
+                lofi_duration = daily_stats.lofi_duration + CASE WHEN $9 = TRUE THEN $7 ELSE 0 END
+        """, user_id, today, 
               0 if is_short or is_lofi else 1,  # videos_watched
               1 if is_short else 0,              # shorts_watched
               1 if is_lofi else 0,               # lofi_sessions
               duration,                           # total_duration
               duration if is_lofi else 0,        # lofi_duration
-              is_short, is_lofi,                 # for UPDATE conditions
-              is_short, is_lofi, duration, is_lofi, duration))
+              is_short, is_lofi)
         
-        # Update channel stats
-        await db.execute("""
+        # Update channel stats with UPSERT
+        await conn.execute("""
             INSERT INTO channel_stats (user_id, channel_id, channel_name, 
                                        videos_watched, total_duration, last_watched)
-            VALUES (?, ?, ?, 1, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(user_id, channel_id) DO UPDATE SET
-                videos_watched = videos_watched + 1,
-                total_duration = total_duration + ?,
+            VALUES ($1, $2, $3, 1, $4, CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id, channel_id) DO UPDATE SET
+                videos_watched = channel_stats.videos_watched + 1,
+                total_duration = channel_stats.total_duration + $4,
                 last_watched = CURRENT_TIMESTAMP,
-                channel_name = ?
-        """, (user_id, channel_id, channel_name, duration, duration, channel_name))
-        
-        await db.commit()
+                channel_name = $3
+        """, user_id, channel_id, channel_name, duration)
 
 
 async def get_daily_stats(user_id: int, target_date: date = None) -> Dict[str, Any]:
@@ -533,13 +556,12 @@ async def get_daily_stats(user_id: int, target_date: date = None) -> Dict[str, A
     if target_date is None:
         target_date = date.today()
     
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM daily_stats WHERE user_id = ? AND date = ?",
-            (user_id, target_date.isoformat())
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM daily_stats WHERE user_id = $1 AND date = $2",
+            user_id, target_date
         )
-        row = await cursor.fetchone()
         
         if row:
             return dict(row)
@@ -555,12 +577,12 @@ async def get_daily_stats(user_id: int, target_date: date = None) -> Dict[str, A
 
 async def get_weekly_stats(user_id: int) -> Dict[str, Any]:
     """Get aggregated stats for the past week."""
-    week_ago = (date.today() - timedelta(days=7)).isoformat()
+    week_ago = date.today() - timedelta(days=7)
     
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    pool = await get_pool()
+    async with pool.acquire() as conn:
         # Aggregate daily stats
-        cursor = await db.execute("""
+        row = await conn.fetchrow("""
             SELECT 
                 COALESCE(SUM(videos_watched), 0) as videos_watched,
                 COALESCE(SUM(shorts_watched), 0) as shorts_watched,
@@ -568,33 +590,33 @@ async def get_weekly_stats(user_id: int) -> Dict[str, Any]:
                 COALESCE(SUM(total_duration), 0) as total_duration,
                 COALESCE(SUM(lofi_duration), 0) as lofi_duration
             FROM daily_stats 
-            WHERE user_id = ? AND date >= ?
-        """, (user_id, week_ago))
+            WHERE user_id = $1 AND date >= $2
+        """, user_id, week_ago)
         
-        stats = dict(await cursor.fetchone())
+        stats = dict(row)
         
         # Get top channels by time
-        cursor = await db.execute("""
+        rows = await conn.fetch("""
             SELECT channel_id, channel_name, 
                    SUM(videos_watched) as videos,
                    SUM(total_duration) as duration
             FROM channel_stats 
-            WHERE user_id = ? AND last_watched >= ?
-            GROUP BY channel_id
+            WHERE user_id = $1 AND last_watched >= $2
+            GROUP BY channel_id, channel_name
             ORDER BY duration DESC
             LIMIT 5
-        """, (user_id, week_ago))
+        """, user_id, week_ago)
         
-        stats["top_channels"] = [dict(row) for row in await cursor.fetchall()]
+        stats["top_channels"] = [dict(row) for row in rows]
         
         return stats
 
 
 async def get_all_time_stats(user_id: int) -> Dict[str, Any]:
     """Get all-time stats for a user."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute("""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
             SELECT 
                 COALESCE(SUM(videos_watched), 0) as videos_watched,
                 COALESCE(SUM(shorts_watched), 0) as shorts_watched,
@@ -602,10 +624,10 @@ async def get_all_time_stats(user_id: int) -> Dict[str, Any]:
                 COALESCE(SUM(total_duration), 0) as total_duration,
                 COALESCE(SUM(lofi_duration), 0) as lofi_duration
             FROM daily_stats 
-            WHERE user_id = ?
-        """, (user_id,))
+            WHERE user_id = $1
+        """, user_id)
         
-        return dict(await cursor.fetchone())
+        return dict(row)
 
 
 async def get_today_watch_count(user_id: int) -> int:
@@ -619,42 +641,39 @@ async def get_today_watch_count(user_id: int) -> int:
 async def add_favorite(user_id: int, video_id: str, video_url: str, title: str,
                        channel_name: str, duration: int, thumbnail_url: str = None) -> bool:
     """Add video to favorites. Returns True if added, False if already exists."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    pool = await get_pool()
+    async with pool.acquire() as conn:
         try:
-            await db.execute(
+            await conn.execute(
                 """INSERT INTO favorites 
                    (user_id, video_id, video_url, title, channel_name, duration, thumbnail_url)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (user_id, video_id, video_url, title, channel_name, duration, thumbnail_url)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7)""",
+                user_id, video_id, video_url, title, channel_name, duration, thumbnail_url
             )
-            await db.commit()
             return True
-        except aiosqlite.IntegrityError:
+        except asyncpg.UniqueViolationError:
             return False
 
 
 async def remove_favorite(user_id: int, video_id: str) -> bool:
     """Remove video from favorites."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "DELETE FROM favorites WHERE user_id = ? AND video_id = ?",
-            (user_id, video_id)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM favorites WHERE user_id = $1 AND video_id = $2",
+            user_id, video_id
         )
-        await db.commit()
-        return cursor.rowcount > 0
+        return result.split()[-1] != '0'
 
 
 async def get_favorites(user_id: int) -> List[Dict[str, Any]]:
     """Get all favorite videos for a user."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        cursor = await db.execute(
-            "SELECT * FROM favorites WHERE user_id = ? ORDER BY added_at DESC",
-            (user_id,)
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM favorites WHERE user_id = $1 ORDER BY added_at DESC",
+            user_id
         )
-        rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
 
@@ -662,11 +681,11 @@ async def get_favorites(user_id: int) -> List[Dict[str, Any]]:
 
 async def export_user_data(user_id: int) -> Dict[str, Any]:
     """Export all user data as dictionary."""
-    async with aiosqlite.connect(DATABASE_PATH) as db:
-        db.row_factory = aiosqlite.Row
+    pool = await get_pool()
+    async with pool.acquire() as conn:
         # Get user info
-        cursor = await db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
-        user = dict(await cursor.fetchone()) if (await cursor.fetchone()) else {}
+        row = await conn.fetchrow("SELECT * FROM users WHERE user_id = $1", user_id)
+        user = dict(row) if row else {}
         
         # Get settings
         settings = await get_user_settings(user_id)
@@ -696,7 +715,7 @@ async def import_user_data(user_id: int, data: Dict[str, Any]) -> Dict[str, int]
     
     # Import settings
     if "settings" in data:
-        settings = data["settings"]
+        settings = data["settings"].copy()
         settings.pop("user_id", None)  # Remove user_id from settings
         await update_user_settings(user_id, **settings)
     
