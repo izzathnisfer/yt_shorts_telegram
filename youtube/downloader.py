@@ -69,6 +69,8 @@ def _download_video_sync(
             'quiet': True,
             'no_warnings': True,
             'merge_output_format': 'mp4',
+            # Use iOS/Android clients to bypass SSAP restrictions
+            'extractor_args': {'youtube': {'player_client': ['ios', 'android']}},
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
                 'preferedformat': 'mp4',
@@ -120,6 +122,8 @@ def _download_audio_sync(
             'quiet': False,  # Show output for debugging
             'no_warnings': False,
             'ignoreerrors': False,
+            # Use iOS/Android clients to bypass SSAP restrictions
+            'extractor_args': {'youtube': {'player_client': ['ios', 'android']}},
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',

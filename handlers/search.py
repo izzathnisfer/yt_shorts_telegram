@@ -2,12 +2,15 @@
 Search command handler.
 """
 
+import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
 from youtube.search import search_videos
 from youtube.utils import format_views
 from tg_bot.keyboards import search_result_keyboard, back_button
+
+logger = logging.getLogger(__name__)
 
 
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -40,7 +43,14 @@ async def text_search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     
     # Perform the search
-    await perform_search(update, context, query)
+    try:
+        await perform_search(update, context, query)
+    except Exception as e:
+        logger.error(f"Search error for '{query}': {e}", exc_info=True)
+        await update.message.reply_text(
+            f"❌ Search failed: {str(e)[:100]}\n\nPlease try again.",
+            parse_mode='Markdown'
+        )
 
 
 async def perform_search(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str) -> None:
