@@ -43,11 +43,14 @@ Or type: `/lofi 45m` for custom duration
 """
     
     if update.callback_query:
-        await update.callback_query.edit_message_text(
-            message,
-            parse_mode='Markdown',
-            reply_markup=lofi_duration_keyboard()
-        )
+        try:
+            await update.callback_query.edit_message_text(
+                message,
+                parse_mode='Markdown',
+                reply_markup=lofi_duration_keyboard()
+            )
+        except Exception:
+            pass  # Ignore "Message is not modified" errors
     else:
         await update.message.reply_text(
             message,

@@ -117,9 +117,9 @@ def _download_audio_sync(
         ydl_opts = {
             'format': YTDLP_AUDIO_FORMAT,
             'outtmpl': output_path,
-            'quiet': True,
-            'no_warnings': True,
-            'extract_audio': True,  # Ensure we extract audio
+            'quiet': False,  # Show output for debugging
+            'no_warnings': False,
+            'ignoreerrors': False,
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
