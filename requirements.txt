@@ -5,6 +5,7 @@ tgcrypto>=1.2.5
 
 # YouTube
 yt-dlp>=2024.12.01
+bgutil-ytdlp-pot-provider>=1.2.0  # Auto-generates PO Tokens for YouTube
 
 # Database
 asyncpg>=0.29.0
