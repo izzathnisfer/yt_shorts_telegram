@@ -26,6 +26,10 @@ async def get_pool() -> asyncpg.Pool:
     """Get or create the connection pool."""
     global _pool
     if _pool is None:
+        # Extract endpoint ID from hostname (for Neon/Koyeb PostgreSQL)
+        # e.g., "ep-tiny-union-ahh5fbhi.c-3.us-east-1.pg.koyeb.app" -> "ep-tiny-union-ahh5fbhi"
+        endpoint_id = DATABASE_HOST.split('.')[0]
+        
         _pool = await asyncpg.create_pool(
             host=DATABASE_HOST,
             port=DATABASE_PORT,
@@ -34,7 +38,8 @@ async def get_pool() -> asyncpg.Pool:
             database=DATABASE_NAME,
             min_size=2,
             max_size=10,
-            ssl='require'  # Koyeb requires SSL
+            ssl='require',  # Koyeb requires SSL
+            server_settings={'options': f'endpoint={endpoint_id}'}  # Required for Neon/Koyeb
         )
         logger.info("Database connection pool created")
     return _pool
