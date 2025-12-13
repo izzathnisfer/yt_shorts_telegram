@@ -57,6 +57,12 @@ async def post_init(application: Application) -> None:
         BotCommand("settings", "⚙️ Bot settings"),
         BotCommand("export", "💾 Export your data"),
         BotCommand("help", "❓ Help & commands"),
+        # Leech commands
+        BotCommand("l", "📥 Leech URL to Telegram"),
+        BotCommand("ld", "☁️ Leech URL to Nextcloud"),
+        BotCommand("setnc", "⚙️ Nextcloud settings"),
+        BotCommand("num", "🔢 Sum of squares of digits"),
+        BotCommand("admin", "🔧 Admin panel"),
     ]
     await application.bot.set_my_commands(commands)
     logger.info("Bot commands set")
@@ -64,6 +70,11 @@ async def post_init(application: Application) -> None:
     # Initialize database
     logger.info("Initializing database...")
     await init_db()
+    
+    # Initialize leech tables
+    from services.leech_data import init_leech_tables
+    await init_leech_tables()
+    logger.info("Leech tables initialized")
     
     # Cleanup old downloads
     logger.info("Cleaning up old downloads...")

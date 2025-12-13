@@ -42,6 +42,12 @@ def register_handlers(application: Application) -> None:
     from handlers.callbacks import global_callback_handler
     from handlers.direct_link import youtube_url_handler
     
+    # Leech feature imports
+    from handlers.leech import leech_command, leech_nextcloud_command, leech_callback
+    from handlers.leech_nextcloud import setnc_command, setnc_conversation
+    from handlers.leech_admin import admin_command, admin_callback
+    from handlers.z_command import num_command
+    
     # Command handlers
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
@@ -62,9 +68,17 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("import", import_command))
     application.add_handler(CommandHandler("unsubscribe", unsubscribe_command))
     
+    # Leech command handlers
+    application.add_handler(CommandHandler("l", leech_command))
+    application.add_handler(CommandHandler("ld", leech_nextcloud_command))
+    application.add_handler(CommandHandler("setnc", setnc_command))
+    application.add_handler(CommandHandler("admin", admin_command))
+    application.add_handler(CommandHandler("num", num_command))
+    
     # Conversation handlers (must be added before generic callback handlers)
     application.add_handler(subscribe_conversation)
     application.add_handler(nickname_conversation)
+    application.add_handler(setnc_conversation)  # NC settings conversation
     
     # Callback query handlers
     application.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^menu:"))
@@ -75,6 +89,11 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CallbackQueryHandler(priority_callback, pattern=r"^priority:"))
     application.add_handler(CallbackQueryHandler(favorites_callback, pattern=r"^fav:"))
     application.add_handler(CallbackQueryHandler(unsubscribe_callback, pattern=r"^unsub:"))
+    
+    # Leech callback handlers
+    application.add_handler(CallbackQueryHandler(leech_callback, pattern=r"^leech:"))
+    application.add_handler(CallbackQueryHandler(admin_callback, pattern=r"^admin:"))
+    
     application.add_handler(CallbackQueryHandler(global_callback_handler))
     
     # Message handlers
