@@ -30,8 +30,6 @@ def _search_sync(query: str, search_type: str = 'video', limit: int = 5) -> List
             'no_warnings': False,
             'extract_flat': True,
             'skip_download': True,
-            # Use iOS/Android clients to bypass SSAP restrictions
-            'extractor_args': {'youtube': {'player_client': ['ios', 'android']}},
         }
         
         # Add cookies if file exists

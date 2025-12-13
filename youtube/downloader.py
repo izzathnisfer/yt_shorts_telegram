@@ -69,8 +69,6 @@ def _download_video_sync(
             'quiet': True,
             'no_warnings': True,
             'merge_output_format': 'mp4',
-            # Use iOS/Android clients to bypass SSAP restrictions
-            'extractor_args': {'youtube': {'player_client': ['ios', 'android']}},
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
                 'preferedformat': 'mp4',
@@ -116,20 +114,21 @@ def _download_audio_sync(
     Returns the path to downloaded MP3 file or None on failure.
     """
     try:
-        # Use tv_embedded client which often works without PO token
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': output_path,
             'quiet': False,
             'no_warnings': False,
-            # tv_embedded often works without authentication requirements
-            'extractor_args': {'youtube': {'player_client': ['tv_embedded', 'web']}},
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
                 'preferredquality': '192',
             }],
         }
+        
+        # Add cookies for authentication
+        if COOKIES_PATH.exists():
+            ydl_opts['cookiefile'] = str(COOKIES_PATH)
         
         if progress_hook:
             ydl_opts['progress_hooks'] = [progress_hook]
