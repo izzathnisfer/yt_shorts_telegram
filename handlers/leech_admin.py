@@ -100,57 +100,75 @@ def _admin_menu_keyboard() -> InlineKeyboardMarkup:
 
 async def _get_bot_summary() -> str:
     """Get comprehensive bot summary."""
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        # User stats
-        user_count = await conn.fetchval("SELECT COUNT(*) FROM users")
-        active_users = await conn.fetchval(
-            "SELECT COUNT(DISTINCT user_id) FROM video_history WHERE created_at > NOW() - INTERVAL '7 days'"
-        )
-        
-        # Subscription stats
-        sub_count = await conn.fetchval("SELECT COUNT(*) FROM subscriptions")
-        
-        # Watch stats
-        total_videos = await conn.fetchval("SELECT COUNT(*) FROM video_history")
-        total_duration = await conn.fetchval(
-            "SELECT COALESCE(SUM(duration), 0) FROM video_history"
-        ) or 0
-        
-        # Queue stats
-        queue_count = await conn.fetchval("SELECT COUNT(*) FROM queue")
-        
-        # Favorites
-        fav_count = await conn.fetchval("SELECT COUNT(*) FROM favorites")
-    
-    # Leech stats
     try:
-        leech_stats = await get_leech_stats()
-        leech_total = leech_stats.get('total_tasks', 0)
-        leech_data = humanbytes(leech_stats.get('total_bytes', 0))
-    except:
-        leech_total = 0
-        leech_data = "0B"
-    
-    uptime = get_readable_time(int(time.time() - _bot_start_time))
-    hours_watched = total_duration // 3600
-    
-    return (
-        "📊 **Bot Summary**\n\n"
-        f"**Users:**\n"
-        f"├ Total: {user_count}\n"
-        f"├ Active (7d): {active_users}\n"
-        f"└ Subscriptions: {sub_count}\n\n"
-        f"**Content:**\n"
-        f"├ Videos watched: {total_videos}\n"
-        f"├ Watch time: {hours_watched}h\n"
-        f"├ Queue items: {queue_count}\n"
-        f"└ Favorites: {fav_count}\n\n"
-        f"**Leech:**\n"
-        f"├ Total tasks: {leech_total}\n"
-        f"└ Data transferred: {leech_data}\n\n"
-        f"**Uptime:** {uptime}"
-    )
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            # User stats
+            user_count = await conn.fetchval("SELECT COUNT(*) FROM users") or 0
+            
+            # Check if video_history exists and get stats
+            try:
+                active_users = await conn.fetchval(
+                    "SELECT COUNT(DISTINCT user_id) FROM video_history WHERE created_at > NOW() - INTERVAL '7 days'"
+                ) or 0
+                total_videos = await conn.fetchval("SELECT COUNT(*) FROM video_history") or 0
+                total_duration = await conn.fetchval(
+                    "SELECT COALESCE(SUM(duration), 0) FROM video_history"
+                ) or 0
+            except Exception:
+                active_users = 0
+                total_videos = 0
+                total_duration = 0
+            
+            # Subscription stats
+            try:
+                sub_count = await conn.fetchval("SELECT COUNT(*) FROM subscriptions") or 0
+            except Exception:
+                sub_count = 0
+            
+            # Queue stats
+            try:
+                queue_count = await conn.fetchval("SELECT COUNT(*) FROM queue") or 0
+            except Exception:
+                queue_count = 0
+            
+            # Favorites
+            try:
+                fav_count = await conn.fetchval("SELECT COUNT(*) FROM favorites") or 0
+            except Exception:
+                fav_count = 0
+        
+        # Leech stats
+        try:
+            leech_stats = await get_leech_stats()
+            leech_total = leech_stats.get('total_tasks', 0)
+            leech_data = humanbytes(leech_stats.get('total_bytes', 0))
+        except Exception:
+            leech_total = 0
+            leech_data = "0B"
+        
+        uptime = get_readable_time(int(time.time() - _bot_start_time))
+        hours_watched = total_duration // 3600
+        
+        return (
+            "📊 **Bot Summary**\n\n"
+            f"**Users:**\n"
+            f"├ Total: {user_count}\n"
+            f"├ Active (7d): {active_users}\n"
+            f"└ Subscriptions: {sub_count}\n\n"
+            f"**Content:**\n"
+            f"├ Videos watched: {total_videos}\n"
+            f"├ Watch time: {hours_watched}h\n"
+            f"├ Queue items: {queue_count}\n"
+            f"└ Favorites: {fav_count}\n\n"
+            f"**Leech:**\n"
+            f"├ Total tasks: {leech_total}\n"
+            f"└ Data transferred: {leech_data}\n\n"
+            f"**Uptime:** {uptime}"
+        )
+    except Exception as e:
+        logger.error(f"Error getting bot summary: {e}")
+        return f"❌ Error getting bot summary: {e}"
 
 
 async def _get_system_status() -> str:

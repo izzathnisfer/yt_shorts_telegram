@@ -103,10 +103,21 @@ def register_handlers(application: Application) -> None:
         youtube_url_handler
     ))
     
+    # Broadcast message handler (must be BEFORE text_search_handler)
+    from handlers.leech_admin import handle_broadcast_message
+    
+    async def broadcast_or_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Check for broadcast mode first, then fall back to search."""
+        # Try broadcast first
+        if await handle_broadcast_message(update, context):
+            return
+        # Fall back to search
+        await text_search_handler(update, context)
+    
     # Auto-search: any text message that's not a command or YouTube URL
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND,
-        text_search_handler
+        broadcast_or_search
     ))
     
     logger.info("All handlers registered")

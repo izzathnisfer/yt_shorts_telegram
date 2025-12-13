@@ -69,8 +69,8 @@ LOFI_SOURCES = [
 SEARCH_RESULTS_LIMIT = 5
 CHANNEL_VIDEOS_LIMIT = 10
 
-# yt-dlp configuration
-YTDLP_FORMAT = "bestvideo[ext=mp4][height<=%(quality)s]+bestaudio[ext=m4a]/best[ext=mp4][height<=%(quality)s]/best"
+# yt-dlp configuration - flexible format with fallbacks
+YTDLP_FORMAT = "bestvideo[height<=%(quality)s]+bestaudio/best[height<=%(quality)s]/bestvideo+bestaudio/best"
 YTDLP_AUDIO_FORMAT = "bestaudio[ext=m4a]/bestaudio/best"
 COOKIES_PATH = BASE_DIR / "cookies.txt"  # Place your cookies.txt here
 

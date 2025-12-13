@@ -515,6 +515,19 @@ async def is_video_seen(user_id: int, video_id: str) -> bool:
         return row is not None
 
 
+async def get_recent_lofi_ids(user_id: int, days: int = 30) -> set:
+    """Get video IDs of lofi tracks sent to user within the last N days."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT video_id FROM video_history 
+               WHERE user_id = $1 AND is_lofi = TRUE 
+               AND created_at > NOW() - INTERVAL '%s days'""" % days,
+            user_id
+        )
+        return {row['video_id'] for row in rows}
+
+
 # ============ Statistics Operations ============
 
 async def record_watch(user_id: int, channel_id: str, channel_name: str, 

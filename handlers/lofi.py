@@ -97,8 +97,19 @@ async def send_lofi(update: Update, context: ContextTypes.DEFAULT_TYPE, duration
         )
         return
     
-    # Pick the best match
-    selected = results[0]
+    # Get recently sent lofi video IDs (within 30 days) to avoid repetition
+    from database import get_recent_lofi_ids
+    recent_ids = await get_recent_lofi_ids(user_id, days=30)
+    
+    # Filter out recently sent videos
+    fresh_results = [r for r in results if r['id'] not in recent_ids]
+    
+    # Pick the best match - prefer fresh results, fallback to any if all recently sent
+    if fresh_results:
+        selected = fresh_results[0]
+    else:
+        # All results were sent within 30 days, just use the first one
+        selected = results[0]
     
     await message.edit_text(
         f"🎵 Found: {selected['title'][:50]}...\n\n"
