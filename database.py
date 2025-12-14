@@ -830,7 +830,7 @@ async def add_channel_videos_bulk(videos: List[tuple]) -> List[str]:
             result = await conn.fetchval(
                 """INSERT INTO channel_videos (channel_id, video_id, title, duration, is_short, upload_date)
                    VALUES ($1, $2, $3, $4, $5, $6)
-                   ON CONFLICT (video_id) DO NOTHING
+                   ON CONFLICT (channel_id, video_id) DO NOTHING
                    RETURNING video_id""",
                 *video
             )

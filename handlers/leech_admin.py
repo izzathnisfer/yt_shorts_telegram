@@ -361,17 +361,69 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.message.edit_text(text, parse_mode='Markdown', reply_markup=back_refresh(data))
     
     elif data == "admin:tasks":
-        from handlers.leech import get_active_tasks
-        tasks = get_active_tasks()
+        from services.task_manager import get_task_manager
+        tm = get_task_manager()
+        tasks = tm.get_active_tasks()
         
         if not tasks:
             text = "📋 **Active Tasks**\n\n_No active tasks._"
+            keyboard = back_refresh(data)
         else:
             text = f"📋 **Active Tasks** ({len(tasks)})\n\n"
-            for (uid, tid), info in list(tasks.items())[:5]:
-                text += f"• User `{uid}`: {info.get('file_name', 'Unknown')[:20]}... ({info.get('progress', 0):.0f}%)\n"
+            text += f"⏱️ Timeout: {tm.default_timeout // 60} mins\n\n"
+            
+            buttons = []
+            for task in tasks[:10]:  # Show max 10 tasks
+                elapsed = int(task.elapsed)
+                mins, secs = divmod(elapsed, 60)
+                progress_bar = "▓" * int(task.progress / 10) + "░" * (10 - int(task.progress / 10))
+                
+                text += (
+                    f"**{task.task_type.value}**\n"
+                    f"├ User: `{task.user_id}`\n"
+                    f"├ File: {task.file_name[:25]}...\n"
+                    f"├ {progress_bar} {task.progress:.0f}%\n"
+                    f"└ Time: {mins}m {secs}s\n\n"
+                )
+                
+                # Add terminate button
+                buttons.append([
+                    InlineKeyboardButton(
+                        f"❌ Kill: {task.file_name[:15]}...",
+                        callback_data=f"admin:kill:{task.task_id}"
+                    )
+                ])
+            
+            buttons.append([InlineKeyboardButton("🗑️ Kill ALL Tasks", callback_data="admin:killall")])
+            buttons.append([InlineKeyboardButton("🔄 Refresh", callback_data="admin:tasks")])
+            buttons.append([InlineKeyboardButton("◀️ Back", callback_data="admin:menu")])
+            keyboard = InlineKeyboardMarkup(buttons)
         
-        await query.message.edit_text(text, parse_mode='Markdown', reply_markup=back_refresh(data))
+        await query.message.edit_text(text, parse_mode='Markdown', reply_markup=keyboard)
+    
+    elif data.startswith("admin:kill:"):
+        from services.task_manager import get_task_manager
+        task_id = data.split(":", 2)[2]
+        tm = get_task_manager()
+        task = tm.get_task(task_id)
+        
+        if task:
+            await tm.terminate_task(task_id)
+            await query.answer(f"❌ Task terminated for user {task.user_id}", show_alert=True)
+        else:
+            await query.answer("Task not found or already completed", show_alert=True)
+        
+        # Refresh task list
+        await admin_callback(update, context)
+    
+    elif data == "admin:killall":
+        from services.task_manager import get_task_manager
+        tm = get_task_manager()
+        count = await tm.terminate_all_tasks()
+        await query.answer(f"❌ Terminated {count} tasks", show_alert=True)
+        
+        # Refresh task list
+        await admin_callback(update, context)
     
     elif data == "admin:leech":
         try:
@@ -402,16 +454,99 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.message.edit_text(text, parse_mode='Markdown', reply_markup=keyboard)
     
     elif data == "admin:clean":
-        cleaned = 0
+        from services.task_manager import get_task_manager
+        tm = get_task_manager()
+        active_tasks = tm.get_active_tasks()
+        
+        # Calculate storage to free
+        files_to_clean = []
+        storage_to_free = 0
         for f in DOWNLOADS_PATH.glob("*"):
-            if f.is_file() and (time.time() - f.stat().st_mtime) > 3600:
+            if f.is_file():
+                file_path = str(f)
+                # Skip files in active use
+                if not tm.is_path_in_use(file_path):
+                    files_to_clean.append(f)
+                    storage_to_free += f.stat().st_size
+        
+        if active_tasks:
+            # Show warning with affected tasks
+            text = (
+                f"⚠️ **Active Tasks Detected!**\n\n"
+                f"**{len(active_tasks)} task(s) running:**\n"
+            )
+            for task in active_tasks[:5]:
+                text += f"├ User `{task.user_id}`: {task.file_name[:20]}... ({task.progress:.0f}%)\n"
+            if len(active_tasks) > 5:
+                text += f"└ ... and {len(active_tasks) - 5} more\n"
+            
+            text += (
+                f"\n**Safe to clean:** {len(files_to_clean)} files ({humanbytes(storage_to_free)})\n\n"
+                f"Choose an action:"
+            )
+            
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton(f"🧹 Clean Safe ({humanbytes(storage_to_free)})", callback_data="admin:cleansafe")],
+                [InlineKeyboardButton("🗑️ Kill Tasks & Clean ALL", callback_data="admin:cleanforce")],
+                [InlineKeyboardButton("⏳ Wait for Tasks", callback_data="admin:storage")]
+            ])
+            await query.message.edit_text(text, parse_mode='Markdown', reply_markup=keyboard)
+        else:
+            # No active tasks - clean directly
+            cleaned = 0
+            for f in files_to_clean:
                 try:
                     f.unlink()
                     cleaned += 1
                 except:
                     pass
-        await query.answer(f"🧹 Cleaned {cleaned} files", show_alert=True)
-        # Refresh storage view
+            await query.answer(f"🧹 Cleaned {cleaned} files ({humanbytes(storage_to_free)})", show_alert=True)
+            text = await _get_storage_info()
+            await query.message.edit_text(text, parse_mode='Markdown', reply_markup=back_refresh("admin:storage"))
+    
+    elif data == "admin:cleansafe":
+        from services.task_manager import get_task_manager
+        tm = get_task_manager()
+        
+        # Clean only files not in active use
+        cleaned = 0
+        freed = 0
+        for f in DOWNLOADS_PATH.glob("*"):
+            if f.is_file() and not tm.is_path_in_use(str(f)):
+                try:
+                    freed += f.stat().st_size
+                    f.unlink()
+                    cleaned += 1
+                except:
+                    pass
+        
+        await query.answer(f"🧹 Cleaned {cleaned} files ({humanbytes(freed)})", show_alert=True)
+        text = await _get_storage_info()
+        await query.message.edit_text(text, parse_mode='Markdown', reply_markup=back_refresh("admin:storage"))
+    
+    elif data == "admin:cleanforce":
+        from services.task_manager import get_task_manager
+        tm = get_task_manager()
+        
+        # Terminate all tasks first
+        terminated = await tm.terminate_all_tasks()
+        
+        # Clean all files
+        cleaned = 0
+        freed = 0
+        for f in DOWNLOADS_PATH.glob("*"):
+            if f.is_file():
+                try:
+                    freed += f.stat().st_size
+                    f.unlink()
+                    cleaned += 1
+                except:
+                    pass
+        
+        await query.answer(
+            f"❌ Terminated {terminated} tasks\n🧹 Cleaned {cleaned} files ({humanbytes(freed)})",
+            show_alert=True
+        )
         text = await _get_storage_info()
         await query.message.edit_text(text, parse_mode='Markdown', reply_markup=back_refresh("admin:storage"))
     
