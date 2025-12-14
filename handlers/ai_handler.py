@@ -76,7 +76,7 @@ async def ai_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             logger.error(f"AI error: {result['error']}")
         return
     
-    # Handle tool calls
+    # Handle native tool calls
     if result.get("tool_calls"):
         for tool_call in result["tool_calls"]:
             tool_result = await execute_tool(
@@ -101,6 +101,26 @@ async def ai_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         await message.reply_text(final_response, parse_mode='Markdown')
                     except:
                         await message.reply_text(final_response)
+    
+    # Handle embedded function calls in text
+    elif result.get("embedded_function"):
+        embedded = result["embedded_function"]
+        
+        # Send pre-text first if present
+        if embedded.get("pre_text"):
+            try:
+                await message.reply_text(embedded["pre_text"], parse_mode='Markdown')
+            except:
+                await message.reply_text(embedded["pre_text"])
+        
+        # Execute the embedded function
+        await execute_tool(
+            update=update,
+            context=context,
+            tool_name=embedded["name"],
+            arguments=embedded["arguments"],
+            user_id=user_id
+        )
     
     elif result.get("response"):
         # Regular chat response

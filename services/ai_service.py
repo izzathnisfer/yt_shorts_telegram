@@ -188,13 +188,25 @@ Guidelines:
                     "error": None
                 }
             
-            # Regular text response
+            # Regular text response - check for embedded function calls
             text = assistant_message.content or ""
             conversation.add_message({"role": "assistant", "content": text})
+            
+            # Check for embedded function calls like <function=name>{args}</function>
+            embedded = self._parse_embedded_function(text)
+            
+            if embedded:
+                return {
+                    "response": embedded.get("pre_text"),
+                    "embedded_function": embedded,
+                    "tool_calls": None,
+                    "error": None
+                }
             
             return {
                 "response": text,
                 "tool_calls": None,
+                "embedded_function": None,
                 "error": None
             }
         
@@ -242,6 +254,32 @@ Guidelines:
         except Exception as e:
             logger.error(f"Tool result processing error: {e}")
             return None
+    
+    def _parse_embedded_function(self, text: str) -> Optional[Dict[str, Any]]:
+        """Parse embedded function calls like <function=name>{args}</function>"""
+        import re
+        
+        # Pattern: <function=name>{...}</function>
+        pattern = r'<function=(\w+)>(\{.*?\})</function>'
+        match = re.search(pattern, text, re.DOTALL)
+        
+        if not match:
+            return None
+        
+        func_name = match.group(1)
+        try:
+            args = json.loads(match.group(2))
+        except json.JSONDecodeError:
+            args = {}
+        
+        # Extract text before the function call
+        pre_text = text[:match.start()].strip()
+        
+        return {
+            "name": func_name,
+            "arguments": args,
+            "pre_text": pre_text if pre_text else None
+        }
 
 
 # Singleton
