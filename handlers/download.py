@@ -83,62 +83,79 @@ async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     settings = await get_user_settings(user_id)
     quality = settings.get('resolution', '720')
     
-    # Download
-    if time_range:
-        start, end = time_range
-        await loading.edit_text(
-            f"📥 Downloading trimmed: {info['title'][:40]}...\n"
-            f"⏱️ {start//60}:{start%60:02d} - {end//60}:{end%60:02d}"
-        )
-        file_path = await download_video_trimmed(url, start, end, quality=quality)
-    else:
-        await loading.edit_text(f"📥 Downloading: {info['title'][:40]}...")
-        file_path = await download_video(url, quality=quality)
-    
-    if not file_path:
-        await loading.edit_text("❌ Download failed. Please try again.")
-        return
-    
-    # Upload
-    await loading.edit_text("📤 Uploading to Telegram...")
-    
-    caption = f"🎬 **{info['title']}**\n\n"
-    caption += f"📺 {info['channel_name']}\n"
-    caption += f"⏱️ {info['duration_string']}"
-    
-    message_id = await upload_video(
-        chat_id=user_id,
-        file_path=file_path,
-        caption=caption,
-        duration=info['duration'],
-        width=info.get('width', 0),
-        height=info.get('height', 0),
+    # Register with task manager
+    from services.task_manager import get_task_manager, TaskType
+    tm = get_task_manager()
+    tm_task_id = await tm.register_task(
+        user_id=user_id,
+        task_type=TaskType.VIDEO_DOWNLOAD,
+        file_name=info['title'][:50]
     )
     
-    # Cleanup
-    delete_file(file_path)
+    try:
+        # Download
+        if time_range:
+            start, end = time_range
+            await loading.edit_text(
+                f"📥 Downloading trimmed: {info['title'][:40]}...\n"
+                f"⏱️ {start//60}:{start%60:02d} - {end//60}:{end%60:02d}"
+            )
+            file_path = await download_video_trimmed(url, start, end, quality=quality)
+        else:
+            await loading.edit_text(f"📥 Downloading: {info['title'][:40]}...")
+            file_path = await download_video(url, quality=quality)
+        
+        if not file_path:
+            await loading.edit_text("❌ Download failed. Please try again.")
+            return
+        
+        # Update task with file path
+        await tm.update_task(tm_task_id, file_path=file_path)
+        
+        # Upload
+        await loading.edit_text("📤 Uploading to Telegram...")
+        
+        caption = f"🎬 **{info['title']}**\n\n"
+        caption += f"📺 {info['channel_name']}\n"
+        caption += f"⏱️ {info['duration_string']}"
+        
+        message_id = await upload_video(
+            chat_id=user_id,
+            file_path=file_path,
+            caption=caption,
+            duration=info['duration'],
+            width=info.get('width', 0),
+            height=info.get('height', 0),
+        )
+        
+        # Cleanup
+        delete_file(file_path)
+        
+        if message_id:
+            # Record history and stats
+            await add_to_history(
+                user_id=user_id,
+                video_id=video_id,
+                title=info['title'],
+                channel_id=info['channel_id'],
+                channel_name=info['channel_name'],
+                duration=info['duration'],
+                is_short=info['is_short'],
+                source='download'
+            )
+            
+            await record_watch(
+                user_id=user_id,
+                channel_id=info['channel_id'],
+                channel_name=info['channel_name'],
+                duration=info['duration'],
+                is_short=info['is_short']
+            )
+            
+            await loading.edit_text("✅ Video sent!")
+        else:
+            await loading.edit_text("❌ Upload failed. Please try again.")
     
-    if message_id:
-        # Record history and stats
-        await add_to_history(
-            user_id=user_id,
-            video_id=video_id,
-            title=info['title'],
-            channel_id=info['channel_id'],
-            channel_name=info['channel_name'],
-            duration=info['duration'],
-            is_short=info['is_short'],
-            source='download'
-        )
-        
-        await record_watch(
-            user_id=user_id,
-            channel_id=info['channel_id'],
-            channel_name=info['channel_name'],
-            duration=info['duration'],
-            is_short=info['is_short']
-        )
-        
-        await loading.edit_text("✅ Video sent!")
-    else:
-        await loading.edit_text("❌ Upload failed. Please try again.")
+    finally:
+        # Complete task in task manager
+        await tm.complete_task(tm_task_id)

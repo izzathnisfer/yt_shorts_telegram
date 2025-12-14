@@ -285,12 +285,23 @@ async def _run_leech_task(
         # Record task start in database
         db_task_id = await record_leech_start(user_id, file_name, upload_target)
         
+        # Register with centralized task manager
+        from services.task_manager import get_task_manager, TaskType, TaskStatus
+        tm = get_task_manager()
+        tm_task_id = await tm.register_task(
+            user_id=user_id,
+            task_type=TaskType.LEECH_DOWNLOAD,
+            file_name=file_name,
+            message_id=task_id
+        )
+        
         _task_statuses[(user_id, task_id)] = {
             "status": "Starting",
             "file_name": "Unknown",
             "progress": 0,
             "speed": "0B/s",
             "eta": "-",
+            "tm_task_id": tm_task_id,  # Track task manager ID
         }
         
         start_time = time.time()
@@ -384,6 +395,14 @@ async def _run_leech_task(
                                     "speed": humanbytes(speed),
                                     "eta": eta,
                                 })
+                                
+                                # Update task manager with progress
+                                await tm.update_task(
+                                    tm_task_id,
+                                    progress=pct,
+                                    speed=speed,
+                                    file_path=str(download_path)
+                                )
         
         download_duration = time.time() - start_time
         await _edit_status(
@@ -488,6 +507,11 @@ async def _run_leech_task(
             if (user_id, task_id) in _active_tasks:
                 del _active_tasks[(user_id, task_id)]
             if (user_id, task_id) in _task_statuses:
+                # Complete task in centralized manager
+                tm_id = _task_statuses[(user_id, task_id)].get('tm_task_id')
+                if tm_id:
+                    from services.task_manager import get_task_manager
+                    await get_task_manager().complete_task(tm_id)
                 del _task_statuses[(user_id, task_id)]
         
         if download_path and await aiopath.exists(download_path):

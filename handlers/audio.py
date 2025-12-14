@@ -31,45 +31,62 @@ async def audio_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     user_id = update.effective_user.id
     
-    # Get video info
-    loading = await update.message.reply_text("⏳ Getting video info...")
-    
-    info = await get_video_info(url)
-    if not info:
-        await loading.edit_text("❌ Could not get video info. Check the URL.")
-        return
-    
-    if info.get('is_live'):
-        await loading.edit_text("🔴 Cannot extract audio from live streams.")
-        return
-    
-    # Download audio
-    await loading.edit_text(f"🎵 Extracting audio: {info['title'][:40]}...")
-    
-    file_path = await download_audio(url)
-    
-    if not file_path:
-        await loading.edit_text("❌ Audio extraction failed. Please try again.")
-        return
-    
-    # Upload
-    await loading.edit_text("📤 Uploading audio...")
-    
-    caption = f"🎵 **{info['title']}**\n📺 {info['channel_name']}"
-    
-    message_id = await upload_audio(
-        chat_id=user_id,
-        file_path=file_path,
-        caption=caption,
-        title=info['title'],
-        performer=info['channel_name'],
-        duration=info['duration'],
+    # Register with task manager
+    from services.task_manager import get_task_manager, TaskType
+    tm = get_task_manager()
+    tm_task_id = await tm.register_task(
+        user_id=user_id,
+        task_type=TaskType.AUDIO_DOWNLOAD,
+        file_name="audio.mp3"
     )
     
-    # Cleanup
-    delete_file(file_path)
+    try:
+        # Get video info
+        loading = await update.message.reply_text("⏳ Getting video info...")
+        
+        info = await get_video_info(url)
+        if not info:
+            await loading.edit_text("❌ Could not get video info. Check the URL.")
+            return
+        
+        if info.get('is_live'):
+            await loading.edit_text("🔴 Cannot extract audio from live streams.")
+            return
+        
+        # Download audio
+        await loading.edit_text(f"🎵 Extracting audio: {info['title'][:40]}...")
+        
+        file_path = await download_audio(url)
+        
+        if not file_path:
+            await loading.edit_text("❌ Audio extraction failed. Please try again.")
+            return
+        
+        # Update task with file path
+        await tm.update_task(tm_task_id, file_path=file_path)
+        
+        # Upload
+        await loading.edit_text("📤 Uploading audio...")
+        
+        caption = f"🎵 **{info['title']}**\n📺 {info['channel_name']}"
+        
+        message_id = await upload_audio(
+            chat_id=user_id,
+            file_path=file_path,
+            caption=caption,
+            title=info['title'],
+            performer=info['channel_name'],
+            duration=info['duration'],
+        )
+        
+        # Cleanup
+        delete_file(file_path)
+        
+        if message_id:
+            await loading.edit_text("✅ Audio sent!")
+        else:
+            await loading.edit_text("❌ Upload failed. Please try again.")
     
-    if message_id:
-        await loading.edit_text("✅ Audio sent!")
-    else:
-        await loading.edit_text("❌ Upload failed. Please try again.")
+    finally:
+        # Complete task in task manager
+        await tm.complete_task(tm_task_id)

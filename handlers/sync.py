@@ -71,6 +71,15 @@ async def start_sync(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             parse_mode='Markdown'
         )
         
+        # Register with task manager
+        from services.task_manager import get_task_manager, TaskType
+        tm = get_task_manager()
+        tm_task_id = await tm.register_task(
+            user_id=user_id,
+            task_type=TaskType.VIDEO_DOWNLOAD,
+            file_name=item['title'][:50]
+        )
+        
         try:
             # Download
             url = item.get('video_url') or build_video_url(item['video_id'])
@@ -79,6 +88,9 @@ async def start_sync(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             if not file_path:
                 failed += 1
                 continue
+            
+            # Update task with file path
+            await tm.update_task(tm_task_id, file_path=file_path)
             
             # Get fresh info for upload
             info = await get_video_info(url)
@@ -124,6 +136,10 @@ async def start_sync(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         
         except Exception as e:
             failed += 1
+        
+        finally:
+            # Complete task in task manager
+            await tm.complete_task(tm_task_id)
         
         # Small delay to avoid rate limiting
         await asyncio.sleep(1)

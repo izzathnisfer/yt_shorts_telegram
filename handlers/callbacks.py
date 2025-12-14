@@ -119,60 +119,77 @@ async def handle_video_download(
     settings = await get_user_settings(user_id)
     quality = settings.get('resolution', '720')
     
-    await safe_edit(f"📥 Downloading: {info['title'][:50]}...")
-    
-    # Download video
-    file_path = await download_video(url, quality=quality)
-    
-    if not file_path:
-        await safe_edit("❌ Download failed. YouTube may require authentication. Try again later.")
-        return
-    
-    await safe_edit(f"📤 Uploading to Telegram...")
-    
-    # Prepare caption
-    caption = f"🎬 **{info['title']}**\n\n"
-    caption += f"📺 {info['channel_name']}\n"
-    caption += f"⏱️ {info['duration_string']}"
-    
-    # Upload to Telegram
-    message_id = await upload_video(
-        chat_id=user_id,
-        file_path=file_path,
-        caption=caption,
-        duration=int(info['duration']),
-        width=info.get('width', 0) or 0,
-        height=info.get('height', 0) or 0,
+    # Register with task manager
+    from services.task_manager import get_task_manager, TaskType
+    tm = get_task_manager()
+    tm_task_id = await tm.register_task(
+        user_id=user_id,
+        task_type=TaskType.VIDEO_DOWNLOAD,
+        file_name=info['title'][:50]
     )
     
-    # Clean up file
-    delete_file(file_path)
+    try:
+        await safe_edit(f"📥 Downloading: {info['title'][:50]}...")
+        
+        # Download video
+        file_path = await download_video(url, quality=quality)
+        
+        if not file_path:
+            await safe_edit("❌ Download failed. YouTube may require authentication. Try again later.")
+            return
+        
+        # Update task with file path
+        await tm.update_task(tm_task_id, file_path=file_path)
+        
+        await safe_edit(f"📤 Uploading to Telegram...")
+        
+        # Prepare caption
+        caption = f"🎬 **{info['title']}**\n\n"
+        caption += f"📺 {info['channel_name']}\n"
+        caption += f"⏱️ {info['duration_string']}"
+        
+        # Upload to Telegram
+        message_id = await upload_video(
+            chat_id=user_id,
+            file_path=file_path,
+            caption=caption,
+            duration=int(info['duration']),
+            width=info.get('width', 0) or 0,
+            height=info.get('height', 0) or 0,
+        )
+        
+        # Clean up file
+        delete_file(file_path)
+        
+        if message_id:
+            # Record in history
+            await add_to_history(
+                user_id=user_id,
+                video_id=video_id,
+                title=info['title'],
+                channel_id=info['channel_id'],
+                channel_name=info['channel_name'],
+                duration=info['duration'],
+                is_short=info['is_short'],
+                source='download'
+            )
+            
+            # Record stats
+            await record_watch(
+                user_id=user_id,
+                channel_id=info['channel_id'],
+                channel_name=info['channel_name'],
+                duration=info['duration'],
+                is_short=info['is_short']
+            )
+            
+            await query.edit_message_text("✅ Video sent!")
+        else:
+            await query.edit_message_text("❌ Upload failed. Please try again.")
     
-    if message_id:
-        # Record in history
-        await add_to_history(
-            user_id=user_id,
-            video_id=video_id,
-            title=info['title'],
-            channel_id=info['channel_id'],
-            channel_name=info['channel_name'],
-            duration=info['duration'],
-            is_short=info['is_short'],
-            source='download'
-        )
-        
-        # Record stats
-        await record_watch(
-            user_id=user_id,
-            channel_id=info['channel_id'],
-            channel_name=info['channel_name'],
-            duration=info['duration'],
-            is_short=info['is_short']
-        )
-        
-        await query.edit_message_text("✅ Video sent!")
-    else:
-        await query.edit_message_text("❌ Upload failed. Please try again.")
+    finally:
+        # Complete task in task manager
+        await tm.complete_task(tm_task_id)
 
 
 async def handle_audio_download(
@@ -199,36 +216,53 @@ async def handle_audio_download(
         await safe_edit("❌ Could not get video info. YouTube may require authentication.")
         return
     
-    await safe_edit(f"🎵 Extracting audio: {info['title'][:50]}...")
-    
-    # Download audio
-    file_path = await download_audio(url)
-    
-    if not file_path:
-        await safe_edit("❌ Audio extraction failed. YouTube may require authentication.")
-        return
-    
-    await safe_edit(f"📤 Uploading audio...")
-    
-    # Upload to Telegram
-    caption = f"🎵 **{info['title']}**\n📺 {info['channel_name']}"
-    
-    message_id = await upload_audio(
-        chat_id=user_id,
-        file_path=file_path,
-        caption=caption,
-        title=info['title'],
-        performer=info['channel_name'],
-        duration=int(info['duration']),
+    # Register with task manager
+    from services.task_manager import get_task_manager, TaskType
+    tm = get_task_manager()
+    tm_task_id = await tm.register_task(
+        user_id=user_id,
+        task_type=TaskType.AUDIO_DOWNLOAD,
+        file_name=info['title'][:50]
     )
     
-    # Clean up file
-    delete_file(file_path)
+    try:
+        await safe_edit(f"🎵 Extracting audio: {info['title'][:50]}...")
+        
+        # Download audio
+        file_path = await download_audio(url)
+        
+        if not file_path:
+            await safe_edit("❌ Audio extraction failed. YouTube may require authentication.")
+            return
+        
+        # Update task with file path
+        await tm.update_task(tm_task_id, file_path=file_path)
+        
+        await safe_edit(f"📤 Uploading audio...")
+        
+        # Upload to Telegram
+        caption = f"🎵 **{info['title']}**\n📺 {info['channel_name']}"
+        
+        message_id = await upload_audio(
+            chat_id=user_id,
+            file_path=file_path,
+            caption=caption,
+            title=info['title'],
+            performer=info['channel_name'],
+            duration=int(info['duration']),
+        )
+        
+        # Clean up file
+        delete_file(file_path)
+        
+        if message_id:
+            await safe_edit("✅ Audio sent!")
+        else:
+            await safe_edit("❌ Upload failed. Please try again.")
     
-    if message_id:
-        await safe_edit("✅ Audio sent!")
-    else:
-        await safe_edit("❌ Upload failed. Please try again.")
+    finally:
+        # Complete task in task manager
+        await tm.complete_task(tm_task_id)
 
 
 async def handle_add_favorite(
