@@ -428,3 +428,63 @@ def duplicate_warning_keyboard(video_id: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton("❌ Cancel", callback_data="cancel"),
         ],
     ])
+
+
+def video_notification_keyboard(video_id: str, channel_id: str) -> InlineKeyboardMarkup:
+    """Keyboard for video notification messages."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📥 Download", callback_data=f"dl:video:{video_id}"),
+            InlineKeyboardButton("🎵 Audio", callback_data=f"dl:audio:{video_id}"),
+        ],
+        [
+            InlineKeyboardButton("⏰ Snooze", callback_data=f"snooze:menu:{video_id}:{channel_id}"),
+            InlineKeyboardButton("✅ Dismiss", callback_data=f"notif:dismiss:{video_id}"),
+        ],
+    ])
+
+
+def short_notification_keyboard(video_id: str, channel_id: str) -> InlineKeyboardMarkup:
+    """Keyboard for short notification messages (auto-downloaded)."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⭐ Favorite", callback_data=f"fav:add:{video_id}"),
+            InlineKeyboardButton("🔔 Subscribe", callback_data=f"search:sub:{channel_id}"),
+        ],
+        [
+            InlineKeyboardButton("⏰ Snooze", callback_data=f"snooze:menu:{video_id}:{channel_id}"),
+        ],
+    ])
+
+
+def snooze_keyboard(video_id: str, channel_id: str) -> InlineKeyboardMarkup:
+    """Keyboard for selecting snooze duration."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⏰ 1h", callback_data=f"snooze:1h:{video_id}:{channel_id}"),
+            InlineKeyboardButton("⏰ 12h", callback_data=f"snooze:12h:{video_id}:{channel_id}"),
+            InlineKeyboardButton("⏰ 1d", callback_data=f"snooze:1d:{video_id}:{channel_id}"),
+        ],
+        [
+            InlineKeyboardButton("⏰ 3d", callback_data=f"snooze:3d:{video_id}:{channel_id}"),
+            InlineKeyboardButton("⏰ 1w", callback_data=f"snooze:1w:{video_id}:{channel_id}"),
+            InlineKeyboardButton("⏰ 1m", callback_data=f"snooze:1m:{video_id}:{channel_id}"),
+        ],
+        [
+            InlineKeyboardButton("❌ Cancel", callback_data=f"notif:dismiss:{video_id}"),
+        ],
+    ])
+
+
+def snooze_reminder_keyboard(video_id: str, channel_id: str) -> InlineKeyboardMarkup:
+    """Keyboard for snooze reminder messages."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📥 Download", callback_data=f"dl:video:{video_id}"),
+            InlineKeyboardButton("🎵 Audio", callback_data=f"dl:audio:{video_id}"),
+        ],
+        [
+            InlineKeyboardButton("⏰ Snooze Again", callback_data=f"snooze:menu:{video_id}:{channel_id}"),
+            InlineKeyboardButton("✅ Dismiss", callback_data=f"notif:dismiss:{video_id}"),
+        ],
+    ])

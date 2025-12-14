@@ -212,6 +212,9 @@ async def confirm_subscription(update: Update, context: ContextTypes.DEFAULT_TYP
     )
     
     if success:
+        # Mark existing videos and send notification for last 1 video
+        await _process_new_subscription(user_id, channel, query.message.chat_id, context)
+        
         priority_msg = " as a **priority channel** ⭐" if is_priority else ""
         await query.edit_message_text(
             f"✅ Subscribed to **{channel['name']}**{priority_msg}!\n\n"
@@ -229,6 +232,88 @@ async def confirm_subscription(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data.pop('channel_results', None)
     
     return ConversationHandler.END
+
+
+async def _process_new_subscription(user_id: int, channel: dict, chat_id: int, context) -> None:
+    """
+    Process new subscription:
+    1. Mark all existing videos in channel_videos table (no notification)
+    2. Send notification for only the last 1 video
+    """
+    from database import add_channel_video, log_notification
+    from youtube.info import get_channel_videos
+    from youtube.utils import format_views
+    from tg_bot.keyboards import video_notification_keyboard
+    
+    try:
+        # Get recent videos from channel
+        videos = await get_channel_videos(channel['url'], limit=50)
+        
+        if not videos:
+            return
+        
+        # Mark all videos as pre-subscription (add to channel_videos, log as notified)
+        for video in videos[1:]:  # Skip the first (latest) video
+            # Add to channel_videos
+            await add_channel_video(
+                channel_id=channel['id'],
+                video_id=video['id'],
+                title=video['title'],
+                duration=video.get('duration', 0),
+                is_short=video.get('is_short', False),
+                upload_date=video.get('upload_date')
+            )
+            # Mark as already notified (so scheduler won't send)
+            await log_notification(
+                user_id=user_id,
+                video_id=video['id'],
+                channel_id=channel['id'],
+                notification_type='pre_subscription'
+            )
+        
+        # Send notification for only the LAST 1 video (first in list = most recent)
+        if videos:
+            latest_video = videos[0]
+            
+            # Add to channel_videos
+            await add_channel_video(
+                channel_id=channel['id'],
+                video_id=latest_video['id'],
+                title=latest_video['title'],
+                duration=latest_video.get('duration', 0),
+                is_short=latest_video.get('is_short', False),
+                upload_date=latest_video.get('upload_date')
+            )
+            
+            # Send notification for latest video
+            message = (
+                f"📺 **Latest from {channel['name']}!**\n\n"
+                f"🎬 {latest_video['title']}\n"
+                f"👁️ {format_views(latest_video.get('view_count', 0))} views • ⏱️ {latest_video.get('duration_string', '')}\n\n"
+                f"🔗 {latest_video.get('url', '')}"
+            )
+            
+            try:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=message,
+                    parse_mode='Markdown',
+                    reply_markup=video_notification_keyboard(latest_video['id'], channel['id'])
+                )
+                
+                # Log notification
+                await log_notification(
+                    user_id=user_id,
+                    video_id=latest_video['id'],
+                    channel_id=channel['id'],
+                    notification_type='subscription_welcome'
+                )
+            except Exception as e:
+                logger.error(f"Error sending subscription welcome notification: {e}")
+                
+    except Exception as e:
+        logger.error(f"Error processing new subscription: {e}")
+
 
 
 async def cancel_subscription(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

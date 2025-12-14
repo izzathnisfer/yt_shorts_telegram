@@ -186,16 +186,75 @@ async def init_db():
             )
         """)
         
-        # Seen videos (for new video detection in subscriptions)
+        # Channel videos - tracks all videos from subscribed channels
         await conn.execute("""
-            CREATE TABLE IF NOT EXISTS seen_videos (
+            CREATE TABLE IF NOT EXISTS channel_videos (
                 id SERIAL PRIMARY KEY,
-                user_id BIGINT,
-                video_id TEXT,
-                seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users(user_id),
+                channel_id TEXT NOT NULL,
+                video_id TEXT NOT NULL,
+                title TEXT,
+                duration INTEGER,
+                is_short BOOLEAN DEFAULT FALSE,
+                upload_date TIMESTAMP,
+                first_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(channel_id, video_id)
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_channel_videos_channel 
+            ON channel_videos(channel_id)
+        """)
+        
+        # Notification log - tracks sent notifications
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS notification_log (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                video_id TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                notification_type TEXT,
+                sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(user_id, video_id)
             )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_notification_log_user 
+            ON notification_log(user_id)
+        """)
+        
+        # Snoozed notifications - tracks snooze reminders
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS snoozed_notifications (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                video_id TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                video_title TEXT,
+                snoozed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                remind_at TIMESTAMP NOT NULL,
+                status TEXT DEFAULT 'pending',
+                UNIQUE(user_id, video_id)
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_snoozed_remind 
+            ON snoozed_notifications(remind_at, status)
+        """)
+        
+        # Admin settings - configurable settings
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS admin_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Insert default admin settings
+        await conn.execute("""
+            INSERT INTO admin_settings (key, value) 
+            VALUES ('check_interval_minutes', '15')
+            ON CONFLICT (key) DO NOTHING
         """)
         
         logger.info("Database tables initialized")
@@ -526,6 +585,158 @@ async def get_recent_lofi_ids(user_id: int, days: int = 30) -> set:
             user_id
         )
         return {row['video_id'] for row in rows}
+
+
+# ============ Channel Videos & Notification Operations ============
+
+async def add_channel_video(channel_id: str, video_id: str, title: str, 
+                            duration: int, is_short: bool, upload_date=None) -> bool:
+    """
+    Add a video to channel_videos table.
+    Returns True if newly added, False if already exists.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        try:
+            await conn.execute(
+                """INSERT INTO channel_videos 
+                   (channel_id, video_id, title, duration, is_short, upload_date)
+                   VALUES ($1, $2, $3, $4, $5, $6)""",
+                channel_id, video_id, title, duration, is_short, upload_date
+            )
+            return True
+        except asyncpg.UniqueViolationError:
+            return False
+
+
+async def get_channel_video(video_id: str) -> Optional[Dict[str, Any]]:
+    """Get a video record from channel_videos."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM channel_videos WHERE video_id = $1",
+            video_id
+        )
+        return dict(row) if row else None
+
+
+async def has_notification_sent(user_id: int, video_id: str) -> bool:
+    """Check if notification was already sent to user for this video."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT 1 FROM notification_log WHERE user_id = $1 AND video_id = $2",
+            user_id, video_id
+        )
+        return row is not None
+
+
+async def log_notification(user_id: int, video_id: str, channel_id: str, 
+                           notification_type: str = 'video') -> None:
+    """Log that a notification was sent to user."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO notification_log 
+               (user_id, video_id, channel_id, notification_type)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (user_id, video_id) DO NOTHING""",
+            user_id, video_id, channel_id, notification_type
+        )
+
+
+async def add_snooze(user_id: int, video_id: str, channel_id: str, 
+                     video_title: str, remind_at) -> None:
+    """Add a snoozed notification."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO snoozed_notifications 
+               (user_id, video_id, channel_id, video_title, remind_at)
+               VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT (user_id, video_id) 
+               DO UPDATE SET remind_at = $5, status = 'pending'""",
+            user_id, video_id, channel_id, video_title, remind_at
+        )
+
+
+async def get_due_snoozes() -> List[Dict[str, Any]]:
+    """Get all snoozed notifications that are due for reminder."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT * FROM snoozed_notifications 
+               WHERE remind_at <= NOW() AND status = 'pending'"""
+        )
+        return [dict(row) for row in rows]
+
+
+async def mark_snooze_reminded(snooze_id: int) -> None:
+    """Mark a snoozed notification as reminded."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE snoozed_notifications SET status = 'reminded' WHERE id = $1",
+            snooze_id
+        )
+
+
+async def dismiss_snooze(user_id: int, video_id: str) -> None:
+    """Dismiss a snoozed notification."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """UPDATE snoozed_notifications 
+               SET status = 'dismissed' 
+               WHERE user_id = $1 AND video_id = $2""",
+            user_id, video_id
+        )
+
+
+async def get_admin_setting(key: str, default: str = None) -> Optional[str]:
+    """Get an admin setting value."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT value FROM admin_settings WHERE key = $1",
+            key
+        )
+        return row['value'] if row else default
+
+
+async def set_admin_setting(key: str, value: str) -> None:
+    """Set an admin setting value."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO admin_settings (key, value, updated_at)
+               VALUES ($1, $2, NOW())
+               ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()""",
+            key, value
+        )
+
+
+async def get_all_subscribed_channels() -> List[Dict[str, Any]]:
+    """Get all unique channels that have at least one subscriber."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT DISTINCT channel_id, channel_name, channel_url 
+               FROM subscriptions"""
+        )
+        return [dict(row) for row in rows]
+
+
+async def get_channel_subscribers(channel_id: str) -> List[Dict[str, Any]]:
+    """Get all users subscribed to a channel."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT user_id, subscribed_at, is_priority, nickname 
+               FROM subscriptions WHERE channel_id = $1""",
+            channel_id
+        )
+        return [dict(row) for row in rows]
 
 
 # ============ Statistics Operations ============

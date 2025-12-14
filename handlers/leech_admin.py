@@ -91,8 +91,11 @@ def _admin_menu_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("📈 Leech Stats", callback_data="admin:leech"),
         ],
         [
-            InlineKeyboardButton("📢 Broadcast", callback_data="admin:broadcast"),
+            InlineKeyboardButton("🔔 Notifications", callback_data="admin:notif"),
             InlineKeyboardButton("💾 Storage", callback_data="admin:storage"),
+        ],
+        [
+            InlineKeyboardButton("📢 Broadcast", callback_data="admin:broadcast"),
         ],
         [InlineKeyboardButton("❌ Close", callback_data="admin:close")],
     ])
@@ -405,6 +408,67 @@ async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 [InlineKeyboardButton("❌ Cancel", callback_data="admin:menu")]
             ])
         )
+    
+    elif data == "admin:notif":
+        text = await _get_notification_stats()
+        await query.message.edit_text(text, parse_mode='Markdown', reply_markup=_notif_config_keyboard())
+    
+    elif data.startswith("admin:interval:"):
+        # Set check interval
+        interval = data.split(":")[2]
+        from database import set_admin_setting
+        await set_admin_setting('check_interval_minutes', interval)
+        await query.answer(f"✅ Check interval set to {interval} minutes", show_alert=True)
+        text = await _get_notification_stats()
+        await query.message.edit_text(text, parse_mode='Markdown', reply_markup=_notif_config_keyboard())
+
+
+def _notif_config_keyboard() -> InlineKeyboardMarkup:
+    """Build notification config keyboard with interval options."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("5m", callback_data="admin:interval:5"),
+            InlineKeyboardButton("10m", callback_data="admin:interval:10"),
+            InlineKeyboardButton("15m", callback_data="admin:interval:15"),
+        ],
+        [
+            InlineKeyboardButton("30m", callback_data="admin:interval:30"),
+            InlineKeyboardButton("60m", callback_data="admin:interval:60"),
+        ],
+        [InlineKeyboardButton("🔄 Refresh", callback_data="admin:notif")],
+        [InlineKeyboardButton("◀️ Back", callback_data="admin:menu")]
+    ])
+
+
+async def _get_notification_stats() -> str:
+    """Get notification statistics and settings."""
+    from database import get_admin_setting
+    pool = await get_pool()
+    
+    async with pool.acquire() as conn:
+        # Get notification stats
+        total_sent = await conn.fetchval("SELECT COUNT(*) FROM notification_log")
+        today_sent = await conn.fetchval(
+            "SELECT COUNT(*) FROM notification_log WHERE DATE(sent_at) = CURRENT_DATE"
+        )
+        pending_snoozes = await conn.fetchval(
+            "SELECT COUNT(*) FROM snoozed_notifications WHERE status = 'pending'"
+        )
+        total_channel_videos = await conn.fetchval("SELECT COUNT(*) FROM channel_videos")
+    
+    # Get current check interval
+    check_interval = await get_admin_setting('check_interval_minutes', '15')
+    
+    return (
+        "🔔 **Notification Settings**\n\n"
+        f"**Current Check Interval:** {check_interval} mins\n\n"
+        f"**Stats:**\n"
+        f"├ Total notifications sent: {total_sent}\n"
+        f"├ Sent today: {today_sent}\n"
+        f"├ Pending snoozes: {pending_snoozes}\n"
+        f"└ Videos tracked: {total_channel_videos}\n\n"
+        "**Set Check Interval:**"
+    )
 
 
 async def handle_broadcast_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:

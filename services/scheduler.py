@@ -1,10 +1,11 @@
 """
 Background scheduler for periodic video checking and reports.
+Implements efficient batch channel checking with notification tracking.
 """
 
 import asyncio
 import logging
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from typing import Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -13,7 +14,11 @@ from apscheduler.triggers.cron import CronTrigger
 
 from database import (
     get_all_active_users, get_subscriptions, get_user_settings,
-    is_in_focus_mode, is_video_seen, mark_video_seen, get_today_watch_count
+    is_in_focus_mode, get_today_watch_count,
+    # New notification functions
+    get_all_subscribed_channels, get_channel_subscribers,
+    add_channel_video, has_notification_sent, log_notification,
+    get_due_snoozes, mark_snooze_reminded, get_admin_setting
 )
 from youtube.info import get_channel_videos
 from youtube.downloader import download_video, delete_file
@@ -34,79 +39,137 @@ def get_scheduler() -> AsyncIOScheduler:
     return scheduler
 
 
-async def check_new_videos_for_user(user_id: int, bot) -> None:
-    """Check for new videos for a specific user."""
+async def check_all_channels(bot) -> None:
+    """
+    Efficient batch check: iterate channels (not per-user).
+    For each channel, get new videos and notify all subscribers.
+    """
+    logger.info("Running batch channel video check...")
+    
+    # Get all unique subscribed channels
+    channels = await get_all_subscribed_channels()
+    
+    new_videos_count = 0
+    notifications_sent = 0
+    
+    for channel in channels:
+        try:
+            # Get recent videos from channel
+            videos = await get_channel_videos(channel['channel_url'], limit=50)
+            
+            if not videos:
+                continue
+            
+            # Get all subscribers for this channel
+            subscribers = await get_channel_subscribers(channel['channel_id'])
+            
+            for video in videos:
+                # Try to add video to channel_videos table
+                # Returns True if NEW video, False if already exists
+                is_new = await add_channel_video(
+                    channel_id=channel['channel_id'],
+                    video_id=video['id'],
+                    title=video['title'],
+                    duration=video.get('duration', 0),
+                    is_short=video.get('is_short', False),
+                    upload_date=video.get('upload_date')
+                )
+                
+                if not is_new:
+                    # Already in database, skip
+                    continue
+                
+                new_videos_count += 1
+                logger.info(f"New video detected: {video['title'][:50]}...")
+                
+                # Notify all subscribers of this channel
+                for sub in subscribers:
+                    user_id = sub['user_id']
+                    
+                    try:
+                        # Check if notification already sent
+                        if await has_notification_sent(user_id, video['id']):
+                            continue
+                        
+                        # Check user settings
+                        if not await should_notify_user(user_id, sub):
+                            continue
+                        
+                        # Send notification
+                        await send_video_notification(
+                            bot=bot,
+                            user_id=user_id,
+                            video=video,
+                            channel_name=sub.get('nickname') or channel['channel_name'],
+                            is_priority=sub.get('is_priority', False)
+                        )
+                        
+                        # Log notification
+                        notification_type = 'short' if video.get('is_short') else 'video'
+                        await log_notification(
+                            user_id=user_id,
+                            video_id=video['id'],
+                            channel_id=channel['channel_id'],
+                            notification_type=notification_type
+                        )
+                        
+                        notifications_sent += 1
+                        
+                    except Exception as e:
+                        logger.error(f"Error notifying user {user_id}: {e}")
+                        continue
+                
+                # Small delay between processing videos
+                await asyncio.sleep(0.1)
+            
+            # Small delay between channels
+            await asyncio.sleep(0.5)
+            
+        except Exception as e:
+            logger.error(f"Error checking channel {channel['channel_name']}: {e}")
+            continue
+    
+    logger.info(f"Batch check complete: {new_videos_count} new videos, {notifications_sent} notifications sent")
+
+
+async def should_notify_user(user_id: int, subscription: dict) -> bool:
+    """Check if user should receive notification."""
     try:
         # Check focus mode
         is_focus, _ = await is_in_focus_mode(user_id)
         if is_focus:
-            logger.debug(f"User {user_id} in focus mode, skipping")
-            return
+            return False
         
         # Check quiet hours
         settings = await get_user_settings(user_id)
-        if is_quiet_hours(settings):
-            logger.debug(f"Quiet hours for user {user_id}, skipping non-priority")
-            only_priority = True
-        else:
-            only_priority = False
+        if is_quiet_hours(settings) and not subscription.get('is_priority'):
+            return False
         
         # Check daily limit
         limit = settings.get('daily_limit', 20)
-        today_count = await get_today_watch_count(user_id)
+        if limit > 0:
+            today_count = await get_today_watch_count(user_id)
+            if today_count >= limit:
+                return False
         
-        if limit > 0 and today_count >= limit:
-            logger.debug(f"User {user_id} reached daily limit")
-            return
-        
-        # Get subscriptions
-        subscriptions = await get_subscriptions(user_id)
-        
-        for sub in subscriptions:
-            # Skip non-priority during quiet hours
-            if only_priority and not sub.get('is_priority'):
-                continue
-            
-            try:
-                # Get recent videos from channel
-                videos = await get_channel_videos(sub['channel_url'], limit=5)
-                
-                for video in videos:
-                    # Check if already seen
-                    if await is_video_seen(user_id, video['id']):
-                        continue
-                    
-                    # Mark as seen
-                    await mark_video_seen(user_id, video['id'])
-                    
-                    # Check daily limit again
-                    if limit > 0:
-                        today_count = await get_today_watch_count(user_id)
-                        if today_count >= limit:
-                            break
-                    
-                    # Process video
-                    await process_new_video(user_id, video, sub, settings, bot)
-                    
-                    # Break after first new video per channel to avoid spam
-                    break
-                    
-            except Exception as e:
-                logger.error(f"Error checking channel {sub['channel_name']}: {e}")
-                continue
-                
+        return True
     except Exception as e:
-        logger.error(f"Error checking videos for user {user_id}: {e}")
+        logger.error(f"Error checking notify settings for user {user_id}: {e}")
+        return True  # Default to notify
 
 
-async def process_new_video(user_id: int, video: dict, sub: dict, settings: dict, bot) -> None:
-    """Process and send a new video notification."""
+async def send_video_notification(bot, user_id: int, video: dict, 
+                                   channel_name: str, is_priority: bool = False) -> None:
+    """Send notification for a new video."""
     from tg_bot.keyboards import video_notification_keyboard, short_notification_keyboard
-    from database import add_to_history, record_watch
+    from database import add_to_history, record_watch, get_user_settings
+    from youtube.utils import format_views
     
-    channel_name = sub.get('nickname') or sub.get('channel_name')
     is_short = video.get('is_short', False)
+    settings = await get_user_settings(user_id)
     auto_download = settings.get('auto_download_shorts', True)
+    
+    priority_icon = "⭐ " if is_priority else ""
     
     if is_short and auto_download:
         # Auto-download and send shorts
@@ -116,9 +179,9 @@ async def process_new_video(user_id: int, video: dict, sub: dict, settings: dict
             
             if file_path:
                 caption = (
-                    f"🎬 **New Short from {channel_name}!**\n\n"
+                    f"{priority_icon}🎬 **New Short from {channel_name}!**\n\n"
                     f"{video['title']}\n"
-                    f"⏱️ {video['duration_string']}"
+                    f"⏱️ {video.get('duration_string', '')}"
                 )
                 
                 await upload_video(
@@ -126,7 +189,7 @@ async def process_new_video(user_id: int, video: dict, sub: dict, settings: dict
                     file_path=file_path,
                     caption=caption,
                     duration=video.get('duration', 0),
-                    reply_markup=short_notification_keyboard(video['id'], sub['channel_id'])
+                    reply_markup=short_notification_keyboard(video['id'], video.get('channel_id', ''))
                 )
                 
                 delete_file(file_path)
@@ -136,8 +199,8 @@ async def process_new_video(user_id: int, video: dict, sub: dict, settings: dict
                     user_id=user_id,
                     video_id=video['id'],
                     title=video['title'],
-                    channel_id=sub['channel_id'],
-                    channel_name=sub['channel_name'],
+                    channel_id=video.get('channel_id', ''),
+                    channel_name=channel_name,
                     duration=video.get('duration', 0),
                     is_short=True,
                     source='subscription'
@@ -145,8 +208,8 @@ async def process_new_video(user_id: int, video: dict, sub: dict, settings: dict
                 
                 await record_watch(
                     user_id=user_id,
-                    channel_id=sub['channel_id'],
-                    channel_name=sub['channel_name'],
+                    channel_id=video.get('channel_id', ''),
+                    channel_name=channel_name,
                     duration=video.get('duration', 0),
                     is_short=True
                 )
@@ -155,14 +218,12 @@ async def process_new_video(user_id: int, video: dict, sub: dict, settings: dict
         except Exception as e:
             logger.error(f"Error auto-downloading short: {e}")
     
-    # Send notification for regular videos
-    from youtube.utils import format_views
-    
+    # Send notification message
     message = (
-        f"📺 **New from {channel_name}!**\n\n"
+        f"{priority_icon}📺 **New from {channel_name}!**\n\n"
         f"🎬 {video['title']}\n"
-        f"👁️ {format_views(video.get('view_count', 0))} views • ⏱️ {video['duration_string']}\n\n"
-        f"🔗 {video['url']}"
+        f"👁️ {format_views(video.get('view_count', 0))} views • ⏱️ {video.get('duration_string', '')}\n\n"
+        f"🔗 {video.get('url', '')}"
     )
     
     try:
@@ -170,10 +231,51 @@ async def process_new_video(user_id: int, video: dict, sub: dict, settings: dict
             chat_id=user_id,
             text=message,
             parse_mode='Markdown',
-            reply_markup=video_notification_keyboard(video['id'], sub['channel_id'])
+            reply_markup=video_notification_keyboard(video['id'], video.get('channel_id', ''))
         )
     except Exception as e:
         logger.error(f"Error sending notification to user {user_id}: {e}")
+
+
+async def process_snooze_reminders(bot) -> None:
+    """Process snoozed notifications that are due."""
+    logger.info("Processing snooze reminders...")
+    
+    due_snoozes = await get_due_snoozes()
+    
+    for snooze in due_snoozes:
+        try:
+            user_id = snooze['user_id']
+            
+            # Check if user should be notified
+            if not await should_notify_user(user_id, {}):
+                continue
+            
+            # Send reminder
+            message = (
+                f"⏰ **Reminder: Watch Later**\n\n"
+                f"🎬 {snooze['video_title']}\n\n"
+                f"You snoozed this video earlier. Ready to watch?"
+            )
+            
+            from tg_bot.keyboards import snooze_reminder_keyboard
+            
+            await bot.send_message(
+                chat_id=user_id,
+                text=message,
+                parse_mode='Markdown',
+                reply_markup=snooze_reminder_keyboard(snooze['video_id'], snooze['channel_id'])
+            )
+            
+            # Mark as reminded
+            await mark_snooze_reminded(snooze['id'])
+            
+        except Exception as e:
+            logger.error(f"Error processing snooze reminder: {e}")
+            continue
+    
+    if due_snoozes:
+        logger.info(f"Processed {len(due_snoozes)} snooze reminders")
 
 
 def is_quiet_hours(settings: dict) -> bool:
@@ -245,14 +347,13 @@ async def send_weekly_report(user_id: int, bot) -> None:
 
 
 async def run_periodic_check(bot) -> None:
-    """Run periodic check for all users."""
-    logger.info("Running periodic video check...")
-    
-    users = await get_all_active_users()
-    
-    for user in users:
-        await check_new_videos_for_user(user['user_id'], bot)
-        await asyncio.sleep(1)  # Small delay between users
+    """Run the main periodic check."""
+    await check_all_channels(bot)
+
+
+async def run_snooze_check(bot) -> None:
+    """Run snooze reminder check."""
+    await process_snooze_reminders(bot)
 
 
 async def run_weekly_reports(bot) -> None:
@@ -266,17 +367,31 @@ async def run_weekly_reports(bot) -> None:
         await asyncio.sleep(1)
 
 
-def setup_scheduler(bot) -> AsyncIOScheduler:
+async def setup_scheduler(bot) -> AsyncIOScheduler:
     """Setup and start the background scheduler."""
     sched = get_scheduler()
     
-    # Periodic video check (every 15 minutes)
+    # Get check interval from admin settings (default: 15 minutes)
+    interval_str = await get_admin_setting('check_interval_minutes', '15')
+    check_interval = int(interval_str)
+    
+    # Periodic video check
     sched.add_job(
         run_periodic_check,
-        trigger=IntervalTrigger(minutes=15),
+        trigger=IntervalTrigger(minutes=check_interval),
         args=[bot],
         id='periodic_check',
         name='Check for new videos',
+        replace_existing=True
+    )
+    
+    # Snooze reminder check (every 5 minutes)
+    sched.add_job(
+        run_snooze_check,
+        trigger=IntervalTrigger(minutes=5),
+        args=[bot],
+        id='snooze_check',
+        name='Process snooze reminders',
         replace_existing=True
     )
     
@@ -297,7 +412,7 @@ def setup_scheduler(bot) -> AsyncIOScheduler:
     if not sched.running:
         sched.start()
     
-    logger.info("Scheduler started with periodic check and weekly reports")
+    logger.info(f"Scheduler started: check every {check_interval} mins, snooze check every 5 mins")
     
     return sched
 

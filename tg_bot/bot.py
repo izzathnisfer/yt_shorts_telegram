@@ -95,6 +95,11 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CallbackQueryHandler(leech_callback, pattern=r"^leech:"))
     application.add_handler(CallbackQueryHandler(admin_callback, pattern=r"^admin:"))
     
+    # Snooze and notification callback handlers
+    from handlers.snooze import snooze_callback, notification_callback
+    application.add_handler(CallbackQueryHandler(snooze_callback, pattern=r"^snooze:"))
+    application.add_handler(CallbackQueryHandler(notification_callback, pattern=r"^notif:"))
+    
     application.add_handler(CallbackQueryHandler(global_callback_handler))
     
     # Message handlers

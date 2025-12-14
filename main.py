@@ -78,7 +78,7 @@ async def post_init(application: Application) -> None:
     
     # Start the scheduler for subscription checking
     from services.scheduler import setup_scheduler
-    setup_scheduler(application.bot)
+    await setup_scheduler(application.bot)
     logger.info("Scheduler started for subscription notifications")
     
     # Cleanup old downloads

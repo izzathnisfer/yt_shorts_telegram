@@ -171,11 +171,13 @@ async def get_channel_info(url: str) -> Optional[Dict[str, Any]]:
     }
 
 
-async def get_channel_videos(channel_url: str, limit: int = 10) -> List[Dict[str, Any]]:
+async def get_channel_videos(channel_url: str, limit: int = 50) -> List[Dict[str, Any]]:
     """
     Get recent videos from a channel.
-    Returns list of video info dicts.
+    Returns list of video info dicts with upload_date.
     """
+    from datetime import datetime
+    
     loop = asyncio.get_event_loop()
     
     # Ensure we're looking at the videos tab
@@ -185,7 +187,7 @@ async def get_channel_videos(channel_url: str, limit: int = 10) -> List[Dict[str
         videos_url = channel_url
     
     opts = {
-        'extract_flat': True,
+        'extract_flat': 'in_playlist',  # Gets more metadata including upload_date
         'playlist_items': f'1:{limit}',
     }
     
@@ -200,12 +202,21 @@ async def get_channel_videos(channel_url: str, limit: int = 10) -> List[Dict[str
     entries = info.get('entries', [])
     videos = []
     
-    for entry in entries[:limit]:
+    for entry in entries:
         if not entry:
             continue
         
         video_id = entry.get('id', '')
         duration = entry.get('duration', 0) or 0
+        
+        # Parse upload_date from YYYYMMDD format
+        upload_date = None
+        upload_date_str = entry.get('upload_date')
+        if upload_date_str:
+            try:
+                upload_date = datetime.strptime(upload_date_str, '%Y%m%d')
+            except (ValueError, TypeError):
+                pass
         
         videos.append({
             'id': video_id,
@@ -216,6 +227,7 @@ async def get_channel_videos(channel_url: str, limit: int = 10) -> List[Dict[str
             'url': entry.get('url', f'https://www.youtube.com/watch?v={video_id}'),
             'thumbnail': entry.get('thumbnail'),
             'is_short': duration <= 60,
+            'upload_date': upload_date,
             'channel_name': info.get('channel', info.get('uploader', 'Unknown')),
             'channel_id': info.get('channel_id', ''),
         })
