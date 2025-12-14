@@ -1,12 +1,12 @@
 """
 AI Service for Groq LLM Integration.
-Handles LLM calls, tool execution, and conversation management.
+Uses native Groq tool calling API.
 """
 
 import json
 import time
 import logging
-from typing import Dict, Optional, List, Any, Callable
+from typing import Dict, Optional, List, Any
 from dataclasses import dataclass, field
 
 from groq import Groq
@@ -27,25 +27,23 @@ logger = logging.getLogger(__name__)
 class ConversationContext:
     """Stores conversation history for a user."""
     user_id: int
-    messages: List[Dict[str, str]] = field(default_factory=list)
+    messages: List[Dict] = field(default_factory=list)
     last_activity: float = field(default_factory=time.time)
     request_count: int = 0
     request_window_start: float = field(default_factory=time.time)
     
-    def add_message(self, role: str, content: str):
+    def add_message(self, message: Dict):
         """Add a message to the conversation."""
-        self.messages.append({"role": role, "content": content})
+        self.messages.append(message)
         self.last_activity = time.time()
-        # Keep only last 10 messages for context
+        # Keep only last 10 messages
         if len(self.messages) > 10:
             self.messages = self.messages[-10:]
     
     def is_expired(self) -> bool:
-        """Check if conversation has timed out."""
         return time.time() - self.last_activity > AI_CONVERSATION_TIMEOUT
     
     def is_rate_limited(self) -> bool:
-        """Check if user has exceeded rate limit."""
         now = time.time()
         if now - self.request_window_start > 60:
             self.request_count = 0
@@ -54,7 +52,6 @@ class ConversationContext:
         return self.request_count >= AI_MAX_REQUESTS_PER_MINUTE
     
     def record_request(self):
-        """Record a new request for rate limiting."""
         now = time.time()
         if now - self.request_window_start > 60:
             self.request_count = 1
@@ -64,7 +61,7 @@ class ConversationContext:
 
 
 class AIService:
-    """Main AI service for handling LLM interactions."""
+    """Main AI service using native Groq tool calling."""
     
     _instance = None
     
@@ -91,212 +88,167 @@ class AIService:
     
     @property
     def is_available(self) -> bool:
-        """Check if AI service is available."""
         return self._client is not None and AI_ENABLED
     
     def get_conversation(self, user_id: int) -> ConversationContext:
-        """Get or create conversation context for a user."""
         if user_id not in self._conversations or self._conversations[user_id].is_expired():
             self._conversations[user_id] = ConversationContext(user_id=user_id)
         return self._conversations[user_id]
     
     def clear_conversation(self, user_id: int):
-        """Clear conversation history for a user."""
         if user_id in self._conversations:
             del self._conversations[user_id]
     
     def _get_system_prompt(self, user_context: Dict[str, Any]) -> str:
-        """Generate system prompt with user context."""
-        return f"""You are the YouTube Shorts Bot AI assistant. Help users manage their YouTube experience.
+        return f"""You are a friendly YouTube assistant bot. Help users find and download videos, manage subscriptions, and stay focused.
 
-## User: {user_context.get('first_name', 'User')}
-- Subscriptions: {user_context.get('subscription_count', 0)} channels
-- Today's videos: {user_context.get('today_count', 0)}/{user_context.get('daily_limit', 20)}
-- Focus mode: {'Active' if user_context.get('is_focus') else 'Inactive'}
+User: {user_context.get('first_name', 'Friend')}
+Subscriptions: {user_context.get('subscription_count', 0)} channels
+Today's videos: {user_context.get('today_count', 0)}/{user_context.get('daily_limit', 20)}
 
-## CRITICAL RULES:
-1. For actions, respond with ONLY the JSON object, nothing else: {{"tool": "name", "args": {{}}}}
-2. For normal chat, respond with just text, no JSON.
-3. NEVER mix text and JSON in the same response.
-
-## Available tools:
-- search_youtube: {{"tool": "search_youtube", "args": {{"query": "search term"}}}}
-- download_video: {{"tool": "download_video", "args": {{"url": "youtube.com/..."}}}}
-- download_audio: {{"tool": "download_audio", "args": {{"url": "youtube.com/..."}}}}
-- list_subscriptions: {{"tool": "list_subscriptions", "args": {{}}}}
-- get_stats: {{"tool": "get_stats", "args": {{}}}}
-- enable_focus: {{"tool": "enable_focus", "args": {{"duration": "30m"}}}}
-- disable_focus: {{"tool": "disable_focus", "args": {{}}}}
-- get_lofi_music: {{"tool": "get_lofi_music", "args": {{"duration_minutes": 30}}}}
-
-## Examples:
-User: "Hi!" → You: "Hello! 👋 How can I help you today?"
-User: "Search MKBHD" → You: {{"tool": "search_youtube", "args": {{"query": "MKBHD"}}}}
-User: "Show stats" → You: {{"tool": "get_stats", "args": {{}}}}
-User: "I'm bored" → You: "What kind of content interests you? Music, tutorials, gaming?"
-User: "yes music" → You: {{"tool": "search_youtube", "args": {{"query": "music videos"}}}}
-"""
+Guidelines:
+- Be friendly and use emojis 🎬
+- Use tools when user wants to take action
+- For casual chat, just respond naturally
+- Keep responses concise"""
 
     async def process_message(
         self,
         user_id: int,
         message: str,
-        user_context: Dict[str, Any],
-        use_smart_model: bool = False
+        user_context: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """
-        Process a user message and return AI response.
-        Uses simple JSON response format instead of native tool calling for compatibility.
-        """
+        """Process user message with native Groq tool calling."""
         if not self.is_available:
-            return {
-                "response": None,
-                "tool_call": None,
-                "error": "AI service is not available"
-            }
+            return {"error": "AI service not available"}
         
         conversation = self.get_conversation(user_id)
         
-        # Check rate limiting
         if conversation.is_rate_limited():
             return {
-                "response": "⏳ You're sending too many requests. Please wait a moment.",
-                "tool_call": None,
+                "response": "⏳ Too many requests. Please wait a moment.",
                 "error": "rate_limited"
             }
         
         conversation.record_request()
-        conversation.add_message("user", message)
-        
-        # Use the fast model by default - better for simple conversations
-        model = AI_MODEL_SMART if use_smart_model else AI_MODEL_FAST
-        max_tokens = AI_MAX_TOKENS_SMART if use_smart_model else AI_MAX_TOKENS_FAST
+        conversation.add_message({"role": "user", "content": message})
         
         try:
-            # Build messages list with system prompt
+            # Build messages with system prompt
             messages = [
                 {"role": "system", "content": self._get_system_prompt(user_context)}
             ] + conversation.messages
             
-            # Simple chat completion without tool calling
+            # Call Groq with native tools
             response = self._client.chat.completions.create(
-                model=model,
+                model=AI_MODEL_FAST,
                 messages=messages,
+                tools=AI_TOOLS,
+                tool_choice="auto",
                 temperature=AI_TEMPERATURE,
-                max_tokens=max_tokens,
+                max_tokens=AI_MAX_TOKENS_FAST,
             )
             
-            content = response.choices[0].message.content
+            assistant_message = response.choices[0].message
             
-            if not content:
+            # Check for tool calls
+            if assistant_message.tool_calls:
+                tool_calls = []
+                for tc in assistant_message.tool_calls:
+                    try:
+                        args = json.loads(tc.function.arguments)
+                    except json.JSONDecodeError:
+                        args = {}
+                    
+                    tool_calls.append({
+                        "id": tc.id,
+                        "name": tc.function.name,
+                        "arguments": args
+                    })
+                
+                # Store assistant message for context
+                conversation.add_message({
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        }
+                        for tc in assistant_message.tool_calls
+                    ]
+                })
+                
                 return {
+                    "tool_calls": tool_calls,
                     "response": None,
-                    "tool_call": None,
-                    "error": "Empty response from AI"
+                    "error": None
                 }
             
-            conversation.add_message("assistant", content)
+            # Regular text response
+            text = assistant_message.content or ""
+            conversation.add_message({"role": "assistant", "content": text})
             
-            # Check if response contains a tool call (JSON format)
-            tool_call = self._parse_tool_call(content)
-            
-            if tool_call:
-                return {
-                    "response": None,
-                    "tool_call": tool_call,
-                    "error": None,
-                    "model_used": model
-                }
-            else:
-                # It's a regular text response
-                return {
-                    "response": content,
-                    "tool_call": None,
-                    "error": None,
-                    "model_used": model
-                }
+            return {
+                "response": text,
+                "tool_calls": None,
+                "error": None
+            }
         
         except Exception as e:
             logger.error(f"AI processing error: {e}")
-            return {
-                "response": None,
-                "tool_call": None,
-                "error": str(e)
-            }
+            return {"error": str(e)}
     
-    def _parse_tool_call(self, content: str) -> Optional[Dict[str, Any]]:
-        """Parse tool call from AI response if present."""
-        import re
+    async def send_tool_result(
+        self,
+        user_id: int,
+        tool_call_id: str,
+        tool_name: str,
+        result: str,
+        user_context: Dict[str, Any]
+    ) -> str:
+        """Send tool result back to model for final response."""
+        conversation = self.get_conversation(user_id)
         
-        content = content.strip()
+        # Add tool result to conversation
+        conversation.add_message({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "name": tool_name,
+            "content": result
+        })
         
-        # Try 1: Check if entire response is JSON
-        if content.startswith('{') and content.endswith('}'):
-            try:
-                data = json.loads(content)
-                if "tool" in data:
-                    return {
-                        "name": data.get("tool"),
-                        "arguments": data.get("args", {})
-                    }
-            except json.JSONDecodeError:
-                pass
-        
-        # Try 2: Extract JSON object from within text
-        # Look for {"tool": ...} pattern anywhere in the text
-        json_pattern = r'\{[^{}]*"tool"[^{}]*\}'
-        matches = re.findall(json_pattern, content)
-        
-        for match in matches:
-            try:
-                data = json.loads(match)
-                if "tool" in data:
-                    return {
-                        "name": data.get("tool"),
-                        "arguments": data.get("args", {})
-                    }
-            except json.JSONDecodeError:
-                continue
-        
-        # Try 3: Find JSON with nested braces (for args with values)
-        # Match from {"tool" to the matching closing brace
-        start_idx = content.find('{"tool"')
-        if start_idx == -1:
-            start_idx = content.find("{'tool'")
-        
-        if start_idx != -1:
-            brace_count = 0
-            end_idx = start_idx
-            for i, char in enumerate(content[start_idx:], start_idx):
-                if char == '{':
-                    brace_count += 1
-                elif char == '}':
-                    brace_count -= 1
-                    if brace_count == 0:
-                        end_idx = i + 1
-                        break
+        try:
+            messages = [
+                {"role": "system", "content": self._get_system_prompt(user_context)}
+            ] + conversation.messages
             
-            if end_idx > start_idx:
-                try:
-                    json_str = content[start_idx:end_idx]
-                    data = json.loads(json_str)
-                    if "tool" in data:
-                        return {
-                            "name": data.get("tool"),
-                            "arguments": data.get("args", {})
-                        }
-                except json.JSONDecodeError:
-                    pass
+            # Get final response
+            response = self._client.chat.completions.create(
+                model=AI_MODEL_FAST,
+                messages=messages,
+                temperature=AI_TEMPERATURE,
+                max_tokens=AI_MAX_TOKENS_FAST,
+            )
+            
+            text = response.choices[0].message.content or ""
+            conversation.add_message({"role": "assistant", "content": text})
+            
+            return text
         
-        return None
+        except Exception as e:
+            logger.error(f"Tool result processing error: {e}")
+            return None
 
 
-# Singleton instance
+# Singleton
 _ai_service: Optional[AIService] = None
 
 
 def get_ai_service() -> AIService:
-    """Get the singleton AI service instance."""
     global _ai_service
     if _ai_service is None:
         _ai_service = AIService()
