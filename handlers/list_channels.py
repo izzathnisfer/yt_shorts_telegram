@@ -1,4 +1,4 @@
-w"""
+"""
 List channels command handler with pagination and channel management.
 """
 
