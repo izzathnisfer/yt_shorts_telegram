@@ -25,7 +25,7 @@ def register_handlers(application: Application) -> None:
     from handlers.help import help_command
     from handlers.subscribe import subscribe_conversation
     from handlers.unsubscribe import unsubscribe_command, unsubscribe_callback
-    from handlers.list_channels import list_command
+    from handlers.list_channels import list_command, list_callback
     from handlers.search import search_command, search_callback, text_search_handler
     from handlers.queue import queue_command, queue_callback
     from handlers.download import download_command
@@ -90,6 +90,7 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CallbackQueryHandler(priority_callback, pattern=r"^priority:"))
     application.add_handler(CallbackQueryHandler(favorites_callback, pattern=r"^fav:"))
     application.add_handler(CallbackQueryHandler(unsubscribe_callback, pattern=r"^unsub:"))
+    application.add_handler(CallbackQueryHandler(list_callback, pattern=r"^channels:"))
     
     # Leech callback handlers
     application.add_handler(CallbackQueryHandler(leech_callback, pattern=r"^leech:"))
