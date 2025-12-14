@@ -107,42 +107,34 @@ class AIService:
     
     def _get_system_prompt(self, user_context: Dict[str, Any]) -> str:
         """Generate system prompt with user context."""
-        return f"""You are the YouTube Shorts Bot AI assistant. You help users manage their YouTube experience mindfully.
+        return f"""You are the YouTube Shorts Bot AI assistant. Help users manage their YouTube experience.
 
-## Your Capabilities:
-- Search and download YouTube videos/audio
-- Manage channel subscriptions
-- Manage watch queue and favorites
-- Configure user settings
-- Enable focus mode for distraction-free work
-- Provide watching statistics
-
-## User Context:
-- Name: {user_context.get('first_name', 'User')}
+## User: {user_context.get('first_name', 'User')}
 - Subscriptions: {user_context.get('subscription_count', 0)} channels
 - Today's videos: {user_context.get('today_count', 0)}/{user_context.get('daily_limit', 20)}
 - Focus mode: {'Active' if user_context.get('is_focus') else 'Inactive'}
 
-## Guidelines:
-1. Be friendly and use emojis appropriately 🎬
-2. Keep responses concise for mobile reading
-3. When user wants to perform an action, respond with a JSON tool call in this format:
-   {{"tool": "tool_name", "args": {{"param": "value"}}}}
-4. Available tools: search_youtube, download_video, download_audio, list_subscriptions, enable_focus, disable_focus, get_stats, get_lofi_music
-5. For simple greetings or questions, just respond naturally without JSON.
+## CRITICAL RULES:
+1. For actions, respond with ONLY the JSON object, nothing else: {{"tool": "name", "args": {{}}}}
+2. For normal chat, respond with just text, no JSON.
+3. NEVER mix text and JSON in the same response.
+
+## Available tools:
+- search_youtube: {{"tool": "search_youtube", "args": {{"query": "search term"}}}}
+- download_video: {{"tool": "download_video", "args": {{"url": "youtube.com/..."}}}}
+- download_audio: {{"tool": "download_audio", "args": {{"url": "youtube.com/..."}}}}
+- list_subscriptions: {{"tool": "list_subscriptions", "args": {{}}}}
+- get_stats: {{"tool": "get_stats", "args": {{}}}}
+- enable_focus: {{"tool": "enable_focus", "args": {{"duration": "30m"}}}}
+- disable_focus: {{"tool": "disable_focus", "args": {{}}}}
+- get_lofi_music: {{"tool": "get_lofi_music", "args": {{"duration_minutes": 30}}}}
 
 ## Examples:
-User: "Hi!"
-You: "Hello! 👋 I'm your YouTube assistant. How can I help you today?"
-
-User: "Search for MKBHD"
-You: {{"tool": "search_youtube", "args": {{"query": "MKBHD"}}}}
-
-User: "Show my stats"
-You: {{"tool": "get_stats", "args": {{}}}}
-
-User: "Enable focus for 30 minutes"  
-You: {{"tool": "enable_focus", "args": {{"duration": "30m"}}}}
+User: "Hi!" → You: "Hello! 👋 How can I help you today?"
+User: "Search MKBHD" → You: {{"tool": "search_youtube", "args": {{"query": "MKBHD"}}}}
+User: "Show stats" → You: {{"tool": "get_stats", "args": {{}}}}
+User: "I'm bored" → You: "What kind of content interests you? Music, tutorials, gaming?"
+User: "yes music" → You: {{"tool": "search_youtube", "args": {{"query": "music videos"}}}}
 """
 
     async def process_message(
@@ -234,25 +226,69 @@ You: {{"tool": "enable_focus", "args": {{"duration": "30m"}}}}
     
     def _parse_tool_call(self, content: str) -> Optional[Dict[str, Any]]:
         """Parse tool call from AI response if present."""
+        import re
+        
         content = content.strip()
         
-        # Check if the response looks like JSON
-        if not (content.startswith('{') and content.endswith('}')):
-            return None
+        # Try 1: Check if entire response is JSON
+        if content.startswith('{') and content.endswith('}'):
+            try:
+                data = json.loads(content)
+                if "tool" in data:
+                    return {
+                        "name": data.get("tool"),
+                        "arguments": data.get("args", {})
+                    }
+            except json.JSONDecodeError:
+                pass
         
-        try:
-            data = json.loads(content)
+        # Try 2: Extract JSON object from within text
+        # Look for {"tool": ...} pattern anywhere in the text
+        json_pattern = r'\{[^{}]*"tool"[^{}]*\}'
+        matches = re.findall(json_pattern, content)
+        
+        for match in matches:
+            try:
+                data = json.loads(match)
+                if "tool" in data:
+                    return {
+                        "name": data.get("tool"),
+                        "arguments": data.get("args", {})
+                    }
+            except json.JSONDecodeError:
+                continue
+        
+        # Try 3: Find JSON with nested braces (for args with values)
+        # Match from {"tool" to the matching closing brace
+        start_idx = content.find('{"tool"')
+        if start_idx == -1:
+            start_idx = content.find("{'tool'")
+        
+        if start_idx != -1:
+            brace_count = 0
+            end_idx = start_idx
+            for i, char in enumerate(content[start_idx:], start_idx):
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        end_idx = i + 1
+                        break
             
-            # Check if it has the expected tool call format
-            if "tool" in data:
-                return {
-                    "name": data.get("tool"),
-                    "arguments": data.get("args", {})
-                }
-            
-            return None
-        except json.JSONDecodeError:
-            return None
+            if end_idx > start_idx:
+                try:
+                    json_str = content[start_idx:end_idx]
+                    data = json.loads(json_str)
+                    if "tool" in data:
+                        return {
+                            "name": data.get("tool"),
+                            "arguments": data.get("args", {})
+                        }
+                except json.JSONDecodeError:
+                    pass
+        
+        return None
 
 
 # Singleton instance
