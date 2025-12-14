@@ -1,29 +1,29 @@
 # YouTube Shorts Bot 🎬
 
-A powerful Telegram bot for mindful YouTube consumption with URL leeching, Nextcloud integration, and comprehensive admin tools.
+A powerful Telegram bot for mindful YouTube consumption with smart notifications, snooze reminders, URL leeching, and Nextcloud integration.
 
 ## ✨ Features
 
 ### 📺 YouTube Integration
 - **Channel Subscriptions** - Subscribe to channels, get notifications for new videos
+- **Smart Notifications** - Only notifies for videos uploaded AFTER you subscribed
+- **Snooze Reminders** - Snooze notifications (1h, 12h, 1d, 3d, 1w, 1m)
+- **No Duplicates** - Never receive the same notification twice
 - **Shorts Auto-Delivery** - Auto-download and send YouTube Shorts directly
 - **Smart Search** - Search YouTube from within Telegram
-- **Video Downloads** - Download videos with quality selection
+- **Video Downloads** - Download videos with quality selection (360p-1080p)
 - **Audio Extraction** - Download audio-only (MP3)
-- **Trimming** - Download specific portions of videos
 
 ### 📥 URL Leeching
 - **Direct URL Downloads** - Download files from any direct URL
 - **Telegram Upload** - Upload downloaded files to Telegram (up to 2GB)
 - **Nextcloud Upload** - Upload to your private cloud with auto-delete
 - **Real-time Progress** - Live progress bar during download/upload
-- **Task Management** - Cancel running tasks, per-user limits
 
 ### ☁️ Nextcloud Integration
 - **WebDAV Uploads** - Direct upload to your Nextcloud
 - **Share Links** - Auto-generate shareable links
 - **Auto-Delete** - Configurable timer for automatic cleanup
-- **Secure Storage** - Credentials stored with encoding in PostgreSQL
 
 ### 🧘 Mindful Viewing
 - **Watch Queue** - Save videos to watch later intentionally
@@ -32,75 +32,78 @@ A powerful Telegram bot for mindful YouTube consumption with URL leeching, Nextc
 - **Quiet Hours** - No notifications during set hours
 - **Lofi Study Mode** - Get lofi music for focused studying
 
-### 📊 Statistics & Analytics
+### 📊 Statistics & Admin
 - **Time Optimization Score** - 0-100 score for mindful viewing
-- **Daily/Weekly/All-time Stats** - Track your viewing habits
-- **Top Channels** - See where you spend most time
-- **Time Saved Estimate** - See how much time you've saved
+- **Daily/Weekly Stats** - Track your viewing habits
+- **Admin Panel** - Bot summary, system monitoring, broadcast, storage cleanup
+- **Notification Config** - Admin can set check interval (5/10/15/30/60 mins)
 
-### 🔧 Admin Panel
-- **Bot Summary** - Users, subscriptions, content stats
-- **System Monitoring** - CPU, RAM, disk usage
-- **User Management** - View all users with details
-- **Broadcast Messages** - Send announcements to all users
-- **Task Monitoring** - View and manage active leech tasks
-- **Storage Management** - Clean up old files
+## 🚀 Server Deployment (AWS EC2 / Linux)
 
-### 💾 Data Management
-- **Favorites** - Save favorite videos for quick access
-- **Export/Import** - Backup and restore all your data
-- **Priority Channels** - Mark channels to bypass quiet hours
+### One-Line Setup
+```bash
+git clone <repo-url> && cd youtube-shorts-bot && chmod +x setup_server.sh && ./setup_server.sh
+```
 
-## 🚀 Setup
+### Run the Bot
+```bash
+# Foreground (for testing)
+source venv/bin/activate && python main.py
+
+# Background (production)
+source venv/bin/activate && nohup python main.py > bot.log 2>&1 &
+```
+
+### Update & Restart
+```bash
+git pull && source venv/bin/activate && pkill -f "python main.py"; nohup python main.py > bot.log 2>&1 &
+```
+
+## 💻 Local Development
 
 ### Prerequisites
-- Python 3.9+
+- Python 3.12+
 - PostgreSQL database
 - FFmpeg
 
 ### Installation
 
-1. **Clone the repository**
+1. **Clone and install**
    ```bash
    git clone <repo-url>
    cd youtube-shorts-bot
-   ```
-
-2. **Install dependencies**
-   ```bash
    pip install -r requirements.txt
    ```
 
-3. **Configure environment**
+2. **Configure environment**
    ```bash
    cp .env.example .env
    ```
    
-   Edit `.env` with:
+   Edit `.env`:
    ```
    API_ID=your_api_id
    API_HASH=your_api_hash
    BOT_TOKEN=your_bot_token
-   DB_HOST=localhost
-   DB_USER=postgres
-   DB_PASSWORD=password
-   DB_NAME=youtube_shorts
+   DATABASE_HOST=localhost
+   DATABASE_USER=postgres
+   DATABASE_PASSWORD=password
+   DATABASE_NAME=youtube_shorts
    ADMIN_USERS=your_telegram_user_id
    ```
 
-4. **Install FFmpeg**
+3. **Install FFmpeg**
    - Windows: `winget install ffmpeg`
    - Mac: `brew install ffmpeg`
    - Linux: `sudo apt install ffmpeg`
 
-5. **Run the bot**
+4. **Run**
    ```bash
    python main.py
    ```
 
 ## 📋 Commands
 
-### Content
 | Command | Description |
 |---------|-------------|
 | `/start` | Main menu |
@@ -111,31 +114,13 @@ A powerful Telegram bot for mindful YouTube consumption with URL leeching, Nextc
 | `/download <url>` | Download a video |
 | `/audio <url>` | Download audio only |
 | `/queue` | View watch queue |
-| `/sync` | Download all queued videos |
-
-### Focus & Music
-| Command | Description |
-|---------|-------------|
 | `/lofi` | Get lofi study music |
 | `/focus <duration>` | Enable focus mode |
-| `/limit <number>` | Set daily watch limit |
-
-### Leeching
-| Command | Description |
-|---------|-------------|
+| `/stats` | View your statistics |
+| `/settings` | All preferences |
 | `/l <url>` | Download URL → Telegram |
 | `/ld <url>` | Download URL → Nextcloud |
-| `/setnc` | Configure Nextcloud settings |
-
-### Settings & Stats
-| Command | Description |
-|---------|-------------|
-| `/stats` | View your statistics |
-| `/favorites` | View saved videos |
-| `/settings` | All preferences |
-| `/export` | Export your data |
 | `/admin` | Admin panel (admins only) |
-| `/help` | Help & commands |
 
 ## 📁 Project Structure
 
@@ -143,39 +128,25 @@ A powerful Telegram bot for mindful YouTube consumption with URL leeching, Nextc
 ├── main.py              # Entry point
 ├── config.py            # Configuration
 ├── database.py          # PostgreSQL operations
+├── setup_server.sh      # Server deployment script
 ├── tg_bot/              # Telegram integration
-│   ├── bot.py           # Handler registration
-│   ├── uploader.py      # Pyrogram uploader (2GB)
-│   └── keyboards.py     # UI components
 ├── handlers/            # Command handlers
-│   ├── leech.py         # URL leeching
-│   ├── leech_admin.py   # Admin panel
-│   ├── leech_nextcloud.py # NC settings
+│   ├── snooze.py        # Snooze feature
 │   └── ...
 ├── youtube/             # YouTube integration
-│   ├── downloader.py    # Download videos
-│   ├── search.py        # Search functionality
-│   └── info.py          # Video info extraction
-└── services/            # Background services
-    ├── scheduler.py     # Periodic tasks
-    ├── leech_data.py    # Leech data storage
-    └── bot_stats.py     # Centralized stats
+│   └── downloader.py    # yt-dlp downloads
+└── services/
+    └── scheduler.py     # Batch notifications
 ```
 
-## ⚡ Resource Optimization
+## 🔧 Tech Stack
 
-Designed for low-resource environments (512MB RAM):
-- Streaming downloads (no full file in memory)
-- Immediate cleanup after uploads
-- Efficient PostgreSQL connection pooling
-- Async operations throughout
-- Progress throttling to reduce API calls
-
-## 🔒 Security
-
-- Nextcloud credentials stored with base64 encoding in PostgreSQL
-- Admin-only access to sensitive operations
-- Per-user task isolation
+- **Python 3.12** - Latest stable Python
+- **yt-dlp** - YouTube downloads
+- **python-telegram-bot** - Telegram API
+- **Pyrogram** - Large file uploads (2GB)
+- **PostgreSQL** - Persistent storage
+- **FFmpeg** - Audio/video processing
 
 ## 📄 License
 

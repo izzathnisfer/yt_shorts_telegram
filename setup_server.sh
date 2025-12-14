@@ -13,16 +13,16 @@ sudo apt-get update -y
 echo "📦 Installing ffmpeg..."
 sudo apt-get install -y ffmpeg
 
-# Install Python 3.11 if not present
+# Install Python 3.12 if not present
 echo "🐍 Checking Python..."
-if ! command -v python3.11 &> /dev/null; then
-    sudo apt-get install -y python3.11 python3.11-venv python3-pip
+if ! command -v python3.12 &> /dev/null; then
+    sudo apt-get install -y python3.12 python3.12-venv python3-pip
 fi
 
 # Create virtual environment if not exists
 if [ ! -d "venv" ]; then
     echo "🔧 Creating virtual environment..."
-    python3 -m venv venv
+    python3.12 -m venv venv
 fi
 
 # Activate virtual environment

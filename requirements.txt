@@ -4,7 +4,7 @@ pyrogram>=2.0.106
 tgcrypto>=1.2.5
 
 # YouTube
-yt-dlp>=2024.12.01
+yt-dlp>=2025.12.08
 bgutil-ytdlp-pot-provider>=1.2.0  # Auto-generates PO Tokens for YouTube
 
 # Database
