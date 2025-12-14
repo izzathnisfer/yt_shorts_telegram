@@ -93,37 +93,23 @@ async def ai_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             # Silently fail - don't spam user with errors
         return
     
-    # Handle tool calls
-    if result.get("tool_calls"):
-        tool_results = []
-        
-        for tool_call in result["tool_calls"]:
-            tool_result = await _execute_tool(
-                update=update,
-                context=context,
-                tool_name=tool_call["name"],
-                arguments=tool_call["arguments"],
-                user_id=user_id
-            )
-            tool_results.append({
-                "name": tool_call["name"],
-                "result": tool_result
-            })
-        
-        # If we have results that need AI to format, get follow-up
-        # Otherwise the tool execution already sent the response
-        if not any(r.get("result", {}).get("message_sent") for r in tool_results):
-            follow_up = await ai_service.get_follow_up_response(
-                user_id=user_id,
-                tool_results=tool_results,
-                user_context=user_context
-            )
-            if follow_up:
-                await message.reply_text(follow_up, parse_mode='Markdown')
+    # Handle tool call (singular - JSON format from AI)
+    if result.get("tool_call"):
+        tool_call = result["tool_call"]
+        await _execute_tool(
+            update=update,
+            context=context,
+            tool_name=tool_call["name"],
+            arguments=tool_call["arguments"],
+            user_id=user_id
+        )
     
     elif result.get("response"):
-        # Direct text response
-        await message.reply_text(result["response"], parse_mode='Markdown')
+        # Direct text response - handle markdown parse errors
+        try:
+            await message.reply_text(result["response"], parse_mode='Markdown')
+        except Exception:
+            await message.reply_text(result["response"])
 
 
 def _should_use_smart_model(text: str) -> bool:

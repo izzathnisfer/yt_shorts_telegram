@@ -8,9 +8,8 @@ import time
 import logging
 from typing import Dict, Optional, List, Any, Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 
-from groq import Groq, AsyncGroq
+from groq import Groq
 
 from config import (
     GROQ_API_KEY, AI_ENABLED,
@@ -48,7 +47,6 @@ class ConversationContext:
     def is_rate_limited(self) -> bool:
         """Check if user has exceeded rate limit."""
         now = time.time()
-        # Reset window if more than a minute has passed
         if now - self.request_window_start > 60:
             self.request_count = 0
             self.request_window_start = now
@@ -83,7 +81,6 @@ class AIService:
         self._initialized = True
         self._client: Optional[Groq] = None
         self._conversations: Dict[int, ConversationContext] = {}
-        self._tool_handlers: Dict[str, Callable] = {}
         
         if GROQ_API_KEY and AI_ENABLED:
             try:
@@ -96,11 +93,6 @@ class AIService:
     def is_available(self) -> bool:
         """Check if AI service is available."""
         return self._client is not None and AI_ENABLED
-    
-    def register_tool_handler(self, name: str, handler: Callable):
-        """Register a handler function for a tool."""
-        self._tool_handlers[name] = handler
-        logger.debug(f"Registered tool handler: {name}")
     
     def get_conversation(self, user_id: int) -> ConversationContext:
         """Get or create conversation context for a user."""
@@ -119,12 +111,11 @@ class AIService:
 
 ## Your Capabilities:
 - Search and download YouTube videos/audio
-- Manage channel subscriptions (subscribe, unsubscribe, set priority/nickname)
+- Manage channel subscriptions
 - Manage watch queue and favorites
-- Configure user settings (quality, limits, quiet hours)
+- Configure user settings
 - Enable focus mode for distraction-free work
-- Provide watching statistics and insights
-- Download files from URLs (leech feature)
+- Provide watching statistics
 
 ## User Context:
 - Name: {user_context.get('first_name', 'User')}
@@ -134,17 +125,24 @@ class AIService:
 
 ## Guidelines:
 1. Be friendly and use emojis appropriately 🎬
-2. Always confirm before destructive actions (unsubscribe, clear queue)
-3. Suggest focus mode when user seems overwhelmed
-4. Recommend lofi music for study/work sessions
-5. Keep responses concise for mobile reading
-6. If user wants to download a video, search first if no URL provided
-7. Format lists and stats nicely with emojis
+2. Keep responses concise for mobile reading
+3. When user wants to perform an action, respond with a JSON tool call in this format:
+   {{"tool": "tool_name", "args": {{"param": "value"}}}}
+4. Available tools: search_youtube, download_video, download_audio, list_subscriptions, enable_focus, disable_focus, get_stats, get_lofi_music
+5. For simple greetings or questions, just respond naturally without JSON.
 
-## Important:
-- Use tool calls to execute actions, don't just describe them
-- For simple greetings/questions, use send_message tool
-- If user's request is unclear, ask for clarification
+## Examples:
+User: "Hi!"
+You: "Hello! 👋 I'm your YouTube assistant. How can I help you today?"
+
+User: "Search for MKBHD"
+You: {{"tool": "search_youtube", "args": {{"query": "MKBHD"}}}}
+
+User: "Show my stats"
+You: {{"tool": "get_stats", "args": {{}}}}
+
+User: "Enable focus for 30 minutes"  
+You: {{"tool": "enable_focus", "args": {{"duration": "30m"}}}}
 """
 
     async def process_message(
@@ -155,15 +153,13 @@ class AIService:
         use_smart_model: bool = False
     ) -> Dict[str, Any]:
         """
-        Process a user message and return AI response with tool calls.
-        
-        Returns:
-            Dict with 'response' (text), 'tool_calls' (list), and 'error' (if any)
+        Process a user message and return AI response.
+        Uses simple JSON response format instead of native tool calling for compatibility.
         """
         if not self.is_available:
             return {
                 "response": None,
-                "tool_calls": [],
+                "tool_call": None,
                 "error": "AI service is not available"
             }
         
@@ -173,14 +169,14 @@ class AIService:
         if conversation.is_rate_limited():
             return {
                 "response": "⏳ You're sending too many requests. Please wait a moment.",
-                "tool_calls": [],
+                "tool_call": None,
                 "error": "rate_limited"
             }
         
         conversation.record_request()
         conversation.add_message("user", message)
         
-        # Choose model based on complexity
+        # Use the fast model by default - better for simple conversations
         model = AI_MODEL_SMART if use_smart_model else AI_MODEL_FAST
         max_tokens = AI_MAX_TOKENS_SMART if use_smart_model else AI_MAX_TOKENS_FAST
         
@@ -190,144 +186,72 @@ class AIService:
                 {"role": "system", "content": self._get_system_prompt(user_context)}
             ] + conversation.messages
             
-            # Call Groq API
+            # Simple chat completion without tool calling
             response = self._client.chat.completions.create(
                 model=model,
                 messages=messages,
-                tools=AI_TOOLS,
-                tool_choice="auto",
                 temperature=AI_TEMPERATURE,
                 max_tokens=max_tokens,
             )
             
-            assistant_message = response.choices[0].message
-            tool_calls = []
-            text_response = None
+            content = response.choices[0].message.content
             
-            # Handle tool calls
-            if assistant_message.tool_calls:
-                for tool_call in assistant_message.tool_calls:
-                    tool_name = tool_call.function.name
-                    try:
-                        tool_args = json.loads(tool_call.function.arguments)
-                    except json.JSONDecodeError:
-                        tool_args = {}
-                    
-                    tool_calls.append({
-                        "id": tool_call.id,
-                        "name": tool_name,
-                        "arguments": tool_args
-                    })
-                    
-                    logger.info(f"AI tool call: {tool_name}({tool_args})")
+            if not content:
+                return {
+                    "response": None,
+                    "tool_call": None,
+                    "error": "Empty response from AI"
+                }
             
-            # Get text content if any
-            if assistant_message.content:
-                text_response = assistant_message.content
-                conversation.add_message("assistant", text_response)
+            conversation.add_message("assistant", content)
             
-            return {
-                "response": text_response,
-                "tool_calls": tool_calls,
-                "error": None,
-                "model_used": model
-            }
+            # Check if response contains a tool call (JSON format)
+            tool_call = self._parse_tool_call(content)
+            
+            if tool_call:
+                return {
+                    "response": None,
+                    "tool_call": tool_call,
+                    "error": None,
+                    "model_used": model
+                }
+            else:
+                # It's a regular text response
+                return {
+                    "response": content,
+                    "tool_call": None,
+                    "error": None,
+                    "model_used": model
+                }
         
         except Exception as e:
             logger.error(f"AI processing error: {e}")
             return {
                 "response": None,
-                "tool_calls": [],
+                "tool_call": None,
                 "error": str(e)
             }
     
-    async def execute_tool(
-        self,
-        tool_name: str,
-        arguments: Dict[str, Any],
-        user_id: int,
-        context: Any = None
-    ) -> Dict[str, Any]:
-        """
-        Execute a tool and return the result.
+    def _parse_tool_call(self, content: str) -> Optional[Dict[str, Any]]:
+        """Parse tool call from AI response if present."""
+        content = content.strip()
         
-        Args:
-            tool_name: Name of the tool to execute
-            arguments: Tool arguments
-            user_id: User ID for context
-            context: Telegram context object
-            
-        Returns:
-            Dict with 'success', 'result', and 'error'
-        """
-        if tool_name not in self._tool_handlers:
-            return {
-                "success": False,
-                "result": None,
-                "error": f"Unknown tool: {tool_name}"
-            }
-        
-        try:
-            handler = self._tool_handlers[tool_name]
-            result = await handler(user_id=user_id, context=context, **arguments)
-            
-            return {
-                "success": True,
-                "result": result,
-                "error": None
-            }
-        except Exception as e:
-            logger.error(f"Tool execution error ({tool_name}): {e}")
-            return {
-                "success": False,
-                "result": None,
-                "error": str(e)
-            }
-    
-    async def get_follow_up_response(
-        self,
-        user_id: int,
-        tool_results: List[Dict[str, Any]],
-        user_context: Dict[str, Any]
-    ) -> str:
-        """
-        Get AI response after tool execution to format results nicely.
-        """
-        if not self.is_available or not tool_results:
+        # Check if the response looks like JSON
+        if not (content.startswith('{') and content.endswith('}')):
             return None
         
-        conversation = self.get_conversation(user_id)
-        
-        # Add tool results to conversation
-        results_summary = "\n".join([
-            f"Tool: {r.get('name')}\nResult: {json.dumps(r.get('result', {}), indent=2)}"
-            for r in tool_results
-        ])
-        
-        conversation.add_message(
-            "user", 
-            f"[System: Tool execution completed]\n{results_summary}\n\nPlease summarize the results nicely for the user."
-        )
-        
         try:
-            messages = [
-                {"role": "system", "content": self._get_system_prompt(user_context)}
-            ] + conversation.messages
+            data = json.loads(content)
             
-            response = self._client.chat.completions.create(
-                model=AI_MODEL_FAST,
-                messages=messages,
-                temperature=AI_TEMPERATURE,
-                max_tokens=AI_MAX_TOKENS_FAST,
-            )
+            # Check if it has the expected tool call format
+            if "tool" in data:
+                return {
+                    "name": data.get("tool"),
+                    "arguments": data.get("args", {})
+                }
             
-            result = response.choices[0].message.content
-            if result:
-                conversation.add_message("assistant", result)
-            return result
-        
-        except Exception as e:
-            logger.error(f"Follow-up response error: {e}")
+            return None
+        except json.JSONDecodeError:
             return None
 
 
