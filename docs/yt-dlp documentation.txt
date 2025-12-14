@@ -1,0 +1,223 @@
+# Guide to Using yt-dlp in Python for Downloading Videos with Pre-Configured Resolutions and Audio Formats
+
+This document provides a comprehensive guide to implementing video downloads using the `yt-dlp` library in Python. It focuses on pre-configuring video resolutions (e.g., 1080p, 720p, 360p), handling audio formats (e.g., downloading audio-only or converting to MP3/AAC), and addressing common issues like "list format errors" (which often occur when selecting or listing unavailable formats, mismatched selectors, or missing dependencies like ffmpeg).
+
+The information is based on the latest yt-dlp version as of December 14, 2025: **2025.12.08**. Key best practices include:
+- Always check available formats before downloading to avoid errors.
+- Use explicit format selectors to prevent issues from future defaults.
+- Ensure ffmpeg is installed for merging video/audio streams and format conversions (yt-dlp will warn if it's missing).
+- For bots/scripts, handle exceptions gracefully (e.g., no suitable formats found).
+
+yt-dlp is highly customizable and supports thousands of sites beyond YouTube. This guide assumes you're building a simple Python bot/script for automated downloads.
+
+## 1. Installation and Setup
+Install yt-dlp via pip:
+```bash
+pip install -U yt-dlp
+```
+- **Dependencies**: Install ffmpeg for merging and conversions (e.g., via `apt install ffmpeg` on Linux or download from https://ffmpeg.org).
+- **Python Version**: Works with Python 3.8+.
+- **Update Regularly**: Run `pip install -U yt-dlp` to get fixes for site changes.
+
+In your script, import it as:
+```python
+import yt_dlp
+```
+
+## 2. Understanding Format Selection
+yt-dlp allows fine-grained control over downloads using format selectors. Formats are listed by codes (e.g., "22" for 720p MP4) or filters (e.g., by height, codec).
+
+### Key Concepts
+- **Default Format**: `bestvideo*+bestaudio/best` (best video + best audio, merged if needed). For audio-only: `bestaudio/best`.
+- **Resolution Selection**: Use filters like `[height=1080]` for exact 1080p, `[height<=720]` for up to 720p, or `[height>=360]` for at least 360p.
+- **Audio Handling**: 
+  - Download audio-only with `bestaudio/best`.
+  - Convert to specific formats (e.g., MP3) using postprocessors.
+  - Merge audio with video using `+` in selectors (e.g., `bestvideo[height=1080]+bestaudio`).
+- **Sorting Formats**: Use `format_sort` or `-S` equivalent in Python to prioritize (e.g., by resolution, codec: `res:1080,codec:h264`).
+- **Fallbacks**: Use `/` for alternatives (e.g., `bestvideo[height=1080]/bestvideo[height=720]`).
+- **Avoid Deprecated**: Don't use `ba*` for audio; stick to `bestaudio`.
+
+### Listing Formats to Avoid Errors
+"List format errors" often happen if:
+- The selector doesn't match any available formats (e.g., requesting 4K on a 1080p video).
+- Site changes break extraction (update yt-dlp).
+- No ffmpeg for merging.
+
+To list formats programmatically:
+- Extract info without downloading.
+- Inspect `info['formats']` for details like ID, resolution, extension.
+
+This helps debug by printing available options before downloading.
+
+## 3. Handling Common Errors
+- **No Suitable Formats Found**: Caused by invalid selectors. Fix: List formats first, use fallbacks, or `--ignore-no-formats-error`.
+- **Merging Fails**: Install ffmpeg. Enable multistreams if needed: `'audio_multistreams': True`.
+- **Format Not Downloadable**: Use `'check_formats': True` to verify.
+- **Deprecation Warnings**: Explicitly set formats to avoid future changes (e.g., stdout streaming defaults may shift).
+- **Best Practices**:
+  - Always use `extract_info(download=False)` to preview.
+  - Wrap in try-except for bot reliability.
+  - For bots, log verbose output: `'verbose': True`.
+
+If errors persist, check yt-dlp's verbose logs (`-v` equivalent) for details.
+
+## 4. Building a Download Bot
+Here's a full Python script for a simple "bot" (command-line or automated script) that:
+- Takes a URL, desired resolution (e.g., "1080", "720", "360"), and audio option (e.g., "mp3", "aac", or "none" for video+audio).
+- Lists formats first to validate.
+- Downloads with pre-configured options.
+- Handles errors gracefully.
+
+### Full Script Example
+```python
+import yt_dlp
+import sys
+
+def list_formats(url):
+    """List available formats to debug/validate."""
+    try:
+        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+            info = ydl.extract_info(url, download=False)
+            formats = info.get('formats', [])
+            print("Available Formats:")
+            for f in formats:
+                print(f"ID: {f['format_id']}, Resolution: {f.get('height', 'Audio')}, Ext: {f['ext']}, Note: {f.get('format_note', '')}")
+            return formats
+    except Exception as e:
+        print(f"Error listing formats: {e}")
+        return []
+
+def download_video(url, resolution, audio_format='none'):
+    """
+    Download with pre-configured resolution and audio.
+    - resolution: int (e.g., 1080, 720, 360) or 'best'/'worst'.
+    - audio_format: 'mp3', 'aac', 'opus', or 'none' (for video+audio merge).
+    """
+    ydl_opts = {
+        'outtmpl': '%(title)s.%(ext)s',  # Output filename
+        'verbose': True,  # For debugging
+        'noplaylist': True,  # Download single video
+        'check_formats': True,  # Verify formats are downloadable
+    }
+    
+    # Pre-check formats to avoid errors
+    formats = list_formats(url)
+    if not formats:
+        print("No formats available. Aborting.")
+        return
+    
+    # Set format selector based on resolution
+    if resolution == 'best':
+        video_selector = 'bestvideo'
+    elif resolution == 'worst':
+        video_selector = 'worstvideo'
+    else:
+        try:
+            res = int(resolution)
+            video_selector = f'bestvideo[height<={res}]/bestvideo'  # Best <= specified height, fallback to best
+        except ValueError:
+            print("Invalid resolution. Using best.")
+            video_selector = 'bestvideo'
+    
+    if audio_format == 'none':
+        # Video + Audio merge
+        ydl_opts['format'] = f'{video_selector}+bestaudio/best'
+        ydl_opts['postprocessors'] = []  # No extra conversion
+    else:
+        # Audio-only with conversion
+        ydl_opts['format'] = 'bestaudio/best'
+        ydl_opts['extractaudio'] = True
+        ydl_opts['postprocessors'] = [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': audio_format,
+            'preferredquality': '192',  # Bitrate, e.g., 192kbps
+        }]
+    
+    # Optional: Sort by resolution descending, then H.264 codec
+    ydl_opts['format_sort'] = ['res', 'vcodec:h264']
+    
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+        print("Download complete!")
+    except yt_dlp.DownloadError as e:
+        print(f"Download error: {e}. Check if ffmpeg is installed or formats match.")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
+
+# Example usage: python script.py <URL> <resolution> <audio_format>
+if __name__ == "__main__":
+    if len(sys.argv) < 4:
+        print("Usage: python script.py <URL> <resolution> <audio_format>")
+        sys.exit(1)
+    url = sys.argv[1]
+    resolution = sys.argv[2]
+    audio_format = sys.argv[3]
+    download_video(url, resolution, audio_format)
+```
+
+### How It Works
+- **Pre-Configuration**: Pass resolution as a number (e.g., 1080) to select `bestvideo[height<=1080]`. For audio, specify format or 'none' for full video.
+- **Error Handling**: Lists formats first; catches DownloadError for format issues.
+- **Run Example**:
+  - Video at 720p with merged audio: `python script.py https://www.youtube.com/watch?v=dQw4w9WgXcQ 720 none`
+  - Audio-only as MP3: `python script.py https://www.youtube.com/watch?v=dQw4w9WgXcQ best mp3`
+  - 360p video: `python script.py https://www.youtube.com/watch?v=dQw4w9WgXcQ 360 none`
+
+## 5. Advanced Examples
+### Example 1: Download 1080p Video with Best Audio
+```python
+ydl_opts = {
+    'format': 'bestvideo[height=1080]+bestaudio/best',  # Exact 1080p video + best audio
+    'format_sort': ['res:1080', 'vcodec'],  # Prioritize 1080p, then codec
+}
+with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    ydl.download(['https://www.youtube.com/watch?v=example'])
+```
+
+### Example 2: Download 360p or Lower as MP4, Fallback to 480p
+```python
+ydl_opts = {
+    'format': 'bestvideo[height<=360][ext=mp4]/bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best',
+}
+with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    ydl.download(['https://www.youtube.com/watch?v=example'])
+```
+
+### Example 3: Audio-Only in AAC with Quality Control
+```python
+ydl_opts = {
+    'format': 'bestaudio/best',
+    'postprocessors': [{
+        'key': 'FFmpegExtractAudio',
+        'preferredcodec': 'aac',
+        'preferredquality': '256',  # Higher bitrate
+    }],
+}
+with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    ydl.download(['https://www.youtube.com/watch?v=example'])
+```
+
+### Example 4: List Formats and Conditionally Download
+```python
+with yt_dlp.YoutubeDL() as ydl:
+    info = ydl.extract_info('https://www.youtube.com/watch?v=example', download=False)
+    if any(f['height'] == 1080 for f in info['formats'] if f.get('height')):
+        ydl_opts = {'format': 'bestvideo[height=1080]+bestaudio/best'}
+        ydl.download(['https://www.youtube.com/watch?v=example'])
+    else:
+        print("1080p not available. Downloading best.")
+        ydl_opts = {'format': 'bestvideo+bestaudio/best'}
+        ydl.download(['https://www.youtube.com/watch?v=example'])
+```
+
+## 6. Tips for Bots and Automation
+- **Integration**: Use in Discord/Telegram bots by wrapping in async functions (e.g., with `asyncio`).
+- **Batch Downloads**: Pass a list of URLs to `ydl.download()`.
+- **Progress Hooks**: Add `'progress_hooks': [my_hook]` for status updates.
+- **Cookies for Restricted Videos**: Use `'cookiefile': 'cookies.txt'`.
+- **Debugging**: Set `'quiet': False, 'verbose': True'` for logs.
+- **Updates**: No major format changes in recent releases, but always test selectors per video.
+
+If you encounter specific errors, share the verbose output for further tweaks!

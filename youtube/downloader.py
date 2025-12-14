@@ -66,9 +66,12 @@ def _download_video_sync(
         ydl_opts = {
             'format': YTDLP_FORMAT.replace('%(quality)s', quality),
             'outtmpl': output_path,
-            'quiet': True,
-            'no_warnings': True,
+            'quiet': False,  # Show errors for debugging
+            'no_warnings': False,
+            'check_formats': True,  # Verify formats are downloadable
+            'noplaylist': True,  # Single video only
             'merge_output_format': 'mp4',
+            'format_sort': ['res', 'vcodec:h264'],  # Prioritize H.264 codec
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
                 'preferedformat': 'mp4',
@@ -117,8 +120,10 @@ def _download_audio_sync(
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': output_path,
-            'quiet': False,
+            'quiet': False,  # Show errors for debugging
             'no_warnings': False,
+            'check_formats': True,  # Verify formats are downloadable
+            'noplaylist': True,  # Single video only
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
@@ -136,52 +141,29 @@ def _download_audio_sync(
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         
-        # Find the MP3 file - yt-dlp adds .mp3 extension via postprocessor
+        # yt-dlp adds .mp3 extension via postprocessor
+        # Output is: output_path (without extension) + '.mp3'
         base_path = Path(output_path)
-        mp3_path = Path(str(output_path) + '.mp3')
         
-        logger.debug(f"Looking for audio file at: {mp3_path}")
+        # Check common patterns for where yt-dlp puts the MP3
+        possible_paths = [
+            Path(str(output_path) + '.mp3'),  # output_path.mp3
+            base_path.with_suffix('.mp3'),    # output_path with .mp3 suffix
+        ]
         
-        if mp3_path.exists():
-            logger.info(f"Found audio file: {mp3_path}")
-            return str(mp3_path)
+        for mp3_path in possible_paths:
+            if mp3_path.exists():
+                logger.info(f"Found audio file: {mp3_path}")
+                return str(mp3_path)
         
-        # Try with suffix method
-        mp3_path_alt = base_path.with_suffix('.mp3')
-        if mp3_path_alt.exists():
-            logger.info(f"Found audio file (alt): {mp3_path_alt}")
-            return str(mp3_path_alt)
-        
-        # Fallback: glob for any matching mp3 files in downloads directory
+        # Fallback: search for any MP3 in downloads directory
         downloads_dir = base_path.parent
-        filename_start = base_path.name[:30]  # First 30 chars for matching
-        
         for mp3_file in downloads_dir.glob('*.mp3'):
-            if mp3_file.name.startswith(filename_start):
-                logger.info(f"Found audio file via glob: {mp3_file}")
-                return str(mp3_file)
+            # Return the most recently modified MP3
+            logger.info(f"Found audio file via glob: {mp3_file}")
+            return str(mp3_file)
         
-        # Check for other audio formats and convert
-        for ext in ['.m4a', '.webm', '.opus']:
-            check_path = Path(str(output_path) + ext)
-            if check_path.exists():
-                # Convert to MP3
-                try:
-                    mp3_output = Path(str(output_path) + '.mp3')
-                    subprocess.run([
-                        'ffmpeg', '-y', '-i', str(check_path),
-                        '-vn', '-acodec', 'libmp3lame', '-q:a', '2',
-                        str(mp3_output)
-                    ], check=True, capture_output=True)
-                    check_path.unlink()  # Remove original
-                    return str(mp3_output)
-                except Exception as e:
-                    logger.error(f"FFmpeg conversion error: {e}")
-                    return str(check_path)  # Return original format
-        
-        # Last resort - list all files in downloads
-        logger.warning(f"Could not find audio file. Downloads dir contents: {list(downloads_dir.glob('*'))[:5]}")
-        
+        logger.warning(f"Could not find MP3 file after download. Base path: {output_path}")
         return None
         
     except Exception as e:

@@ -70,11 +70,11 @@ SEARCH_RESULTS_LIMIT = 5
 CHANNEL_VIDEOS_LIMIT = 10
 
 # yt-dlp configuration - following official docs best practices
-# bv* = best video (may include audio), ba = best audio-only
-# Format: try best with height limit, fallback to any best
-YTDLP_FORMAT = "bv*[height<=%(quality)s]+ba/b[height<=%(quality)s]/bv*+ba/b"
-# For audio: ba = best audio-only format, fallback to best combined
-YTDLP_AUDIO_FORMAT = "ba/b"
+# bestvideo = best video-only, bestaudio = best audio-only
+# Format: best video at/below quality + best audio, fallback to combined
+YTDLP_FORMAT = "bestvideo[height<=%(quality)s]+bestaudio/bestvideo+bestaudio/best"
+# For audio: bestaudio = best audio-only format, fallback to best combined
+YTDLP_AUDIO_FORMAT = "bestaudio/best"
 COOKIES_PATH = BASE_DIR / "cookies.txt"  # Place your cookies.txt here
 
 # Telegram message limits
