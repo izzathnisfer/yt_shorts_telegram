@@ -96,3 +96,18 @@ WEEKLY_REPORT_HOUR = 10  # 10 AM
 # Bot messages
 BOT_NAME = "YouTube Shorts Bot"
 BOT_USERNAME = "youtube_shorts_bot"
+
+# AI Integration (Groq)
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+AI_ENABLED = os.getenv("AI_ENABLED", "true").lower() == "true"
+
+# AI Model Configuration
+AI_MODEL_FAST = "llama-3.1-8b-instant"  # Quick responses, intent detection
+AI_MODEL_SMART = "llama-3.3-70b-versatile"  # Complex analysis, multi-step tasks
+AI_MAX_TOKENS_FAST = 512  # Token limit for fast model
+AI_MAX_TOKENS_SMART = 1024  # Token limit for smart model
+AI_TEMPERATURE = 0.7  # Response creativity (0.0-1.0)
+
+# AI Rate Limiting
+AI_MAX_REQUESTS_PER_MINUTE = 10  # Per user
+AI_CONVERSATION_TIMEOUT = 300  # 5 minutes to maintain context

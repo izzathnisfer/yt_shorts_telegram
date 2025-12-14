@@ -112,19 +112,34 @@ def register_handlers(application: Application) -> None:
     
     # Broadcast message handler (must be BEFORE text_search_handler)
     from handlers.leech_admin import handle_broadcast_message
+    from handlers.ai_handler import ai_message_handler
+    from config import AI_ENABLED
     
-    async def broadcast_or_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Check for broadcast mode first, then fall back to search."""
+    async def broadcast_ai_or_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Check for broadcast mode first, then AI, then fall back to search."""
+        # Skip if this is a command
+        if update.message and update.message.text and update.message.text.startswith('/'):
+            return
+        
         # Try broadcast first
         if await handle_broadcast_message(update, context):
             return
+        
+        # Try AI processing if enabled
+        if AI_ENABLED:
+            try:
+                await ai_message_handler(update, context)
+                return
+            except Exception as e:
+                logger.warning(f"AI handler error, falling back to search: {e}")
+        
         # Fall back to search
         await text_search_handler(update, context)
     
-    # Auto-search: any text message that's not a command or YouTube URL
+    # Text message handler: broadcast -> AI -> search
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND,
-        broadcast_or_search
+        broadcast_ai_or_search
     ))
     
     logger.info("All handlers registered")
