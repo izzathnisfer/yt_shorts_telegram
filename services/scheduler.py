@@ -31,6 +31,17 @@ logger = logging.getLogger(__name__)
 scheduler: Optional[AsyncIOScheduler] = None
 
 
+def escape_markdown(text: str) -> str:
+    """Escape markdown special characters in text."""
+    if not text:
+        return text
+    # Escape characters that have special meaning in Telegram Markdown
+    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    for char in special_chars:
+        text = text.replace(char, f'\\{char}')
+    return text
+
+
 def get_scheduler() -> AsyncIOScheduler:
     """Get or create the scheduler."""
     global scheduler
@@ -43,6 +54,7 @@ async def check_all_channels(bot) -> None:
     """
     Efficient batch check: iterate channels (not per-user).
     For each channel, get new videos and notify all subscribers.
+    Only notifies for videos uploaded AFTER user subscribed.
     """
     logger.info("Running batch channel video check...")
     
@@ -82,14 +94,25 @@ async def check_all_channels(bot) -> None:
                 new_videos_count += 1
                 logger.info(f"New video detected: {video['title'][:50]}...")
                 
-                # Notify all subscribers of this channel
+                # Notify subscribers - but only if video is uploaded after they subscribed
+                video_upload_date = video.get('upload_date')
+                
                 for sub in subscribers:
                     user_id = sub['user_id']
+                    subscribed_at = sub.get('subscribed_at')
                     
                     try:
                         # Check if notification already sent
                         if await has_notification_sent(user_id, video['id']):
                             continue
+                        
+                        # CRITICAL: Only notify if video was uploaded AFTER user subscribed
+                        if video_upload_date and subscribed_at:
+                            if video_upload_date < subscribed_at:
+                                # Video is older than subscription - skip notification
+                                # But log it so we don't check again
+                                await log_notification(user_id, video['id'], channel['channel_id'], 'pre_subscription')
+                                continue
                         
                         # Check user settings
                         if not await should_notify_user(user_id, sub):
@@ -218,10 +241,14 @@ async def send_video_notification(bot, user_id: int, video: dict,
         except Exception as e:
             logger.error(f"Error auto-downloading short: {e}")
     
+    # Escape markdown special characters in title
+    safe_title = escape_markdown(video['title'])
+    safe_channel = escape_markdown(channel_name)
+    
     # Send notification message
     message = (
-        f"{priority_icon}📺 **New from {channel_name}!**\n\n"
-        f"🎬 {video['title']}\n"
+        f"{priority_icon}📺 **New from {safe_channel}!**\n\n"
+        f"🎬 {safe_title}\n"
         f"👁️ {format_views(video.get('view_count', 0))} views • ⏱️ {video.get('duration_string', '')}\n\n"
         f"🔗 {video.get('url', '')}"
     )

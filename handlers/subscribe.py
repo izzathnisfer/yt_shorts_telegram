@@ -285,10 +285,21 @@ async def _process_new_subscription(user_id: int, channel: dict, chat_id: int, c
                 upload_date=latest_video.get('upload_date')
             )
             
+            # Escape markdown special characters
+            def escape_md(text):
+                if not text:
+                    return text
+                for char in ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']:
+                    text = text.replace(char, f'\\{char}')
+                return text
+            
+            safe_title = escape_md(latest_video['title'])
+            safe_channel = escape_md(channel['name'])
+            
             # Send notification for latest video
             message = (
-                f"📺 **Latest from {channel['name']}!**\n\n"
-                f"🎬 {latest_video['title']}\n"
+                f"📺 **Latest from {safe_channel}!**\n\n"
+                f"🎬 {safe_title}\n"
                 f"👁️ {format_views(latest_video.get('view_count', 0))} views • ⏱️ {latest_video.get('duration_string', '')}\n\n"
                 f"🔗 {latest_video.get('url', '')}"
             )
