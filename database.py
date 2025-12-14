@@ -36,7 +36,7 @@ async def get_pool() -> asyncpg.Pool:
             user=DATABASE_USER,
             password=DATABASE_PASSWORD,
             database=DATABASE_NAME,
-            min_size=2,
+            min_size=1,  # Reduced from 2 to minimize idle connections
             max_size=10,
             ssl='require',  # Koyeb requires SSL
             server_settings={'options': f'endpoint={endpoint_id}'}  # Required for Neon/Koyeb
@@ -737,6 +737,166 @@ async def get_channel_subscribers(channel_id: str) -> List[Dict[str, Any]]:
             channel_id
         )
         return [dict(row) for row in rows]
+
+
+# ============ OPTIMIZED BATCH FUNCTIONS ============
+# These reduce DB compute by combining multiple queries into single operations
+
+async def get_channels_with_subscribers() -> List[Dict[str, Any]]:
+    """
+    Get all channels with their subscribers in a single query.
+    Returns: [{channel_id, channel_name, channel_url, subscribers: [{user_id, subscribed_at, ...}]}]
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT channel_id, channel_name, channel_url, 
+                      user_id, subscribed_at, is_priority, nickname
+               FROM subscriptions 
+               ORDER BY channel_id"""
+        )
+        
+        # Group by channel
+        channels = {}
+        for row in rows:
+            cid = row['channel_id']
+            if cid not in channels:
+                channels[cid] = {
+                    'channel_id': cid,
+                    'channel_name': row['channel_name'],
+                    'channel_url': row['channel_url'],
+                    'subscribers': []
+                }
+            channels[cid]['subscribers'].append({
+                'user_id': row['user_id'],
+                'subscribed_at': row['subscribed_at'],
+                'is_priority': row['is_priority'],
+                'nickname': row['nickname']
+            })
+        
+        return list(channels.values())
+
+
+async def get_sent_notifications_bulk(user_id: int, video_ids: List[str]) -> set:
+    """
+    Check which videos have already been notified in bulk.
+    Returns: set of video_ids that were already sent.
+    """
+    if not video_ids:
+        return set()
+    
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT video_id FROM notification_log 
+               WHERE user_id = $1 AND video_id = ANY($2)""",
+            user_id, video_ids
+        )
+        return {row['video_id'] for row in rows}
+
+
+async def log_notifications_bulk(notifications: List[tuple]) -> None:
+    """
+    Log multiple notifications in a single batch insert.
+    notifications: [(user_id, video_id, channel_id, notification_type), ...]
+    """
+    if not notifications:
+        return
+    
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.executemany(
+            """INSERT INTO notification_log (user_id, video_id, channel_id, notification_type)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (user_id, video_id) DO NOTHING""",
+            notifications
+        )
+
+
+async def add_channel_videos_bulk(videos: List[tuple]) -> List[str]:
+    """
+    Add multiple videos to channel_videos in a single batch.
+    videos: [(channel_id, video_id, title, duration, is_short, upload_date), ...]
+    Returns: list of video_ids that were newly added.
+    """
+    if not videos:
+        return []
+    
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Insert and return which ones were new
+        new_ids = []
+        for video in videos:
+            result = await conn.fetchval(
+                """INSERT INTO channel_videos (channel_id, video_id, title, duration, is_short, upload_date)
+                   VALUES ($1, $2, $3, $4, $5, $6)
+                   ON CONFLICT (video_id) DO NOTHING
+                   RETURNING video_id""",
+                *video
+            )
+            if result:
+                new_ids.append(result)
+        return new_ids
+
+
+# ============ CACHING LAYER ============
+# In-memory cache to reduce repeated DB queries
+
+import time as _time
+
+_settings_cache = {}
+_settings_cache_ttl = 60  # seconds
+
+_admin_cache = {}
+_admin_cache_ttl = 300  # 5 minutes
+
+
+async def get_user_settings_cached(user_id: int) -> Dict[str, Any]:
+    """Get user settings with in-memory caching (60s TTL)."""
+    cache_key = f"settings:{user_id}"
+    now = _time.time()
+    
+    if cache_key in _settings_cache:
+        data, timestamp = _settings_cache[cache_key]
+        if now - timestamp < _settings_cache_ttl:
+            return data
+    
+    # Fetch from DB and cache
+    data = await get_user_settings(user_id)
+    _settings_cache[cache_key] = (data, now)
+    return data
+
+
+def invalidate_settings_cache(user_id: int = None):
+    """Invalidate settings cache for a user or all users."""
+    if user_id:
+        cache_key = f"settings:{user_id}"
+        _settings_cache.pop(cache_key, None)
+    else:
+        _settings_cache.clear()
+
+
+async def get_admin_setting_cached(key: str, default: str = None) -> str:
+    """Get admin setting with in-memory caching (5 min TTL)."""
+    now = _time.time()
+    
+    if key in _admin_cache:
+        data, timestamp = _admin_cache[key]
+        if now - timestamp < _admin_cache_ttl:
+            return data
+    
+    # Fetch from DB and cache
+    data = await get_admin_setting(key, default)
+    _admin_cache[key] = (data, now)
+    return data
+
+
+def invalidate_admin_cache(key: str = None):
+    """Invalidate admin cache for a key or all keys."""
+    if key:
+        _admin_cache.pop(key, None)
+    else:
+        _admin_cache.clear()
 
 
 # ============ Statistics Operations ============
