@@ -216,6 +216,14 @@ async def _get_user_stats() -> str:
             LIMIT 5
         """)
     
+    # Escape markdown special characters in usernames
+    def escape_md(text):
+        if not text:
+            return text
+        for char in ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']:
+            text = text.replace(char, f'\\{char}')
+        return text
+    
     text = (
         f"👥 **User Statistics**\n\n"
         f"**Total Users:** {total}\n"
@@ -226,8 +234,9 @@ async def _get_user_stats() -> str:
     
     for i, u in enumerate(top_users, 1):
         name = u['username'] or u['first_name'] or str(u['user_id'])
+        name = escape_md(name[:15])  # Escape special chars
         hours = u['total_duration'] // 3600
-        text += f"{i}. {name[:15]} - {u['video_count']} videos ({hours}h)\n"
+        text += f"{i}. {name} - {u['video_count']} videos ({hours}h)\n"
     
     return text
 
@@ -250,6 +259,14 @@ async def _get_subscription_stats() -> str:
             LIMIT 5
         """)
     
+    # Escape markdown special characters
+    def escape_md(text):
+        if not text:
+            return text
+        for char in ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']:
+            text = text.replace(char, f'\\{char}')
+        return text
+    
     text = (
         f"📺 **Subscription Statistics**\n\n"
         f"**Total Subscriptions:** {total}\n"
@@ -258,7 +275,8 @@ async def _get_subscription_stats() -> str:
     )
     
     for i, ch in enumerate(top_channels, 1):
-        text += f"{i}. {ch['channel_name'][:20]} ({ch['sub_count']} subs)\n"
+        name = escape_md(ch['channel_name'][:20])
+        text += f"{i}. {name} ({ch['sub_count']} subs)\n"
     
     return text
 
